@@ -1,0 +1,7 @@
+**
+!dist/**
+!media/**
+!walkthrough/**
+!package.json
+!README.md
+!LICENSE

@@ -1,0 +1,186 @@
+{
+  "name": "agent-conductor",
+  "displayName": "Agent Conductor",
+  "description": "Drive Claude Code, Codex, Gemini CLI, Copilot CLI — any ACP agent — inside VS Code, with per-session cli×model×effort and cross-CLI subagents.",
+  "version": "0.0.1",
+  "publisher": "mariotoffia",
+  "license": "Apache-2.0",
+  "repository": { "type": "git", "url": "https://github.com/mariotoffia/agent-conductor" },
+  "type": "module",
+  "engines": { "vscode": "^1.104.0" },
+  "categories": ["AI", "Chat"],
+  "main": "./dist/extension.cjs",
+  "activationEvents": ["onStartupFinished"],
+  "capabilities": {
+    "untrustedWorkspaces": { "supported": false, "description": "Agents execute code; workspace trust is required." },
+    "virtualWorkspaces": false
+  },
+  "contributes": {
+    "chatParticipants": [
+      {
+        "id": "agentConductor.chat",
+        "name": "conductor",
+        "fullName": "Agent Conductor",
+        "description": "Drive Claude Code, Codex, Gemini, Copilot & any ACP agent",
+        "isSticky": true,
+        "commands": [
+          { "name": "runtime", "description": "Switch CLI runtime for this session" },
+          { "name": "model", "description": "Pick model" },
+          { "name": "effort", "description": "Pick reasoning effort" },
+          { "name": "spawn", "description": "Manually spawn a subagent" },
+          { "name": "cancel", "description": "Cancel the current turn" }
+        ]
+      }
+    ],
+    "commands": [
+      { "command": "agentConductor.connectCli", "title": "Agent Conductor: Connect a CLI…" },
+      { "command": "agentConductor.newSession", "title": "Agent Conductor: New Session", "icon": "$(add)" },
+      { "command": "agentConductor.cancelAll", "title": "Agent Conductor: Cancel All Sessions" },
+      { "command": "agentConductor.refreshRegistry", "title": "Agent Conductor: Refresh ACP Agent Registry" }
+    ],
+    "viewsContainers": {
+      "activitybar": [{ "id": "agentConductor", "title": "Agent Conductor", "icon": "media/icon.svg" }]
+    },
+    "views": {
+      "agentConductor": [{ "id": "agentConductor.sessions", "name": "Sessions" }]
+    },
+    "menus": {
+      "view/title": [{ "command": "agentConductor.newSession", "when": "view == agentConductor.sessions", "group": "navigation" }]
+    },
+    "walkthroughs": [
+      {
+        "id": "agentConductor.gettingStarted",
+        "title": "Set up Agent Conductor",
+        "description": "Connect your agent CLIs and run your first orchestrated session.",
+        "steps": [
+          {
+            "id": "install",
+            "title": "Install at least one agent CLI",
+            "description": "Claude Code, Codex, Gemini CLI or Copilot CLI.\n[Check what's installed](command:agentConductor.connectCli)",
+            "media": { "markdown": "walkthrough/install.md" }
+          },
+          {
+            "id": "connect",
+            "title": "Run the connection wizard",
+            "description": "[Connect a CLI…](command:agentConductor.connectCli)",
+            "media": { "markdown": "walkthrough/connect.md" },
+            "completionEvents": ["onSettingChanged:agentConductor.runtimes"]
+          },
+          {
+            "id": "firstChat",
+            "title": "Start a session",
+            "description": "Open Chat and mention **@conductor**.",
+            "media": { "markdown": "walkthrough/chat.md" }
+          },
+          {
+            "id": "orchestrate",
+            "title": "Enable cross-CLI subagents",
+            "description": "[Review orchestration settings](command:workbench.action.openSettings?%22agentConductor.orchestration%22)",
+            "media": { "markdown": "walkthrough/orchestrate.md" }
+          }
+        ]
+      }
+    ],
+    "configuration": {
+      "title": "Agent Conductor",
+      "properties": {
+        "agentConductor.runtimes": {
+          "type": "object",
+          "scope": "resource",
+          "default": {},
+          "markdownDescription": "Configured agent runtimes, keyed by id. Managed by the wizard; hand-editable.",
+          "additionalProperties": {
+            "type": "object",
+            "properties": {
+              "enabled": { "type": "boolean", "default": true },
+              "command": { "type": "string" },
+              "args": { "type": "array", "items": { "type": "string" } },
+              "env": { "type": "object", "additionalProperties": { "type": "string" } },
+              "defaultModel": { "type": "string" },
+              "defaultEffort": { "type": "string", "enum": ["low", "medium", "high", "xhigh", "max"] },
+              "suppressBuiltInSubagents": { "type": "boolean", "default": true },
+              "safeMode": { "type": "boolean", "default": false }
+            }
+          }
+        },
+        "agentConductor.defaultRuntime": { "type": "string", "default": "claude" },
+        "agentConductor.presets": {
+          "type": "object",
+          "scope": "resource",
+          "default": {},
+          "markdownDescription": "Named (runtime, model, effort) presets usable from `/spawn` and as orchestrator defaults.",
+          "additionalProperties": {
+            "type": "object",
+            "properties": {
+              "runtime": { "type": "string" },
+              "model": { "type": "string" },
+              "effort": { "type": "string" }
+            }
+          }
+        },
+        "agentConductor.orchestration.enabled": { "type": "boolean", "default": true },
+        "agentConductor.orchestration.maxConcurrentSubagents": { "type": "number", "default": 3, "minimum": 1, "maximum": 16 },
+        "agentConductor.orchestration.maxSpawnDepth": {
+          "type": "number",
+          "default": 1,
+          "description": "Depth below which the orchestrator MCP server is not injected (recursion guard)."
+        },
+        "agentConductor.orchestration.subagentIsolation": { "type": "string", "enum": ["shared", "worktree"], "default": "worktree" },
+        "agentConductor.orchestration.budgetUsdPerSubagent": { "type": "number", "default": 2 },
+        "agentConductor.orchestration.defaultSubagentPreset": { "type": "string", "default": "" },
+        "agentConductor.permissions.autoAllow": {
+          "type": "array",
+          "items": { "type": "string", "enum": ["read", "edit", "delete", "move", "search", "execute", "think", "fetch", "switch_mode", "other"] },
+          "default": ["read", "search"],
+          "description": "ACP ToolKinds approved without prompting."
+        },
+        "agentConductor.permissions.autoReject": { "type": "array", "items": { "type": "string" }, "default": [] },
+        "agentConductor.permissions.rememberAlwaysChoices": { "type": "boolean", "default": true },
+        "agentConductor.claude.hideSubscriptionAuth": {
+          "type": "boolean",
+          "default": false,
+          "markdownDescription": "Pass `--hide-claude-auth` to the adapter: forces API-key auth, refusing claude.ai subscription login."
+        },
+        "agentConductor.gemini.writeWorkspaceSettings": {
+          "type": "boolean",
+          "default": false,
+          "description": "Allow merging subagent-suppression keys into the workspace .gemini/settings.json (asked once by the wizard)."
+        },
+        "agentConductor.registry.autoResolve": { "type": "boolean", "default": true },
+        "agentConductor.registry.url": { "type": "string", "default": "https://cdn.agentclientprotocol.com/registry/v1/latest/registry.json" },
+        "agentConductor.registry.pin": { "type": "object", "default": {}, "additionalProperties": { "type": "string" } },
+        "agentConductor.sessions.resumeOnStartup": { "type": "boolean", "default": false },
+        "agentConductor.worktrees.root": { "type": "string", "default": "" },
+        "agentConductor.ui.showThinking": { "type": "boolean", "default": true },
+        "agentConductor.ui.slashCommandAllowlist": {
+          "type": "array",
+          "items": { "type": "string" },
+          "default": ["compact", "init", "review", "plan", "context"]
+        },
+        "agentConductor.logging.level": { "type": "string", "enum": ["off", "error", "info", "debug", "trace"], "default": "info" }
+      }
+    }
+  },
+  "scripts": {
+    "build": "node esbuild.mjs",
+    "watch": "node esbuild.mjs --watch",
+    "lint": "eslint src --max-warnings 0",
+    "typecheck": "tsc --noEmit",
+    "test": "node --import tsx --test src/test/unit/*.test.ts",
+    "test:integration": "echo 'integration: extension-host harness not implemented yet' && exit 0"
+  },
+  "dependencies": {
+    "@agentclientprotocol/sdk": "^1.3.0",
+    "@modelcontextprotocol/sdk": "^1.0.0",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "@types/vscode": "^1.104.0",
+    "esbuild": "^0.25.0",
+    "eslint": "^9.0.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.6.0",
+    "typescript-eslint": "^8.8.0"
+  }
+}

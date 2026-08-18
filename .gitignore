@@ -1,0 +1,8 @@
+node_modules/
+dist/
+reports/
+.cache/
+.vscode-test/
+*.vsix
+.conductor/
+_to_delete/
