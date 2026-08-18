@@ -42,7 +42,7 @@
       "activitybar": [{ "id": "agentConductor", "title": "Agent Conductor", "icon": "media/icon.svg" }]
     },
     "views": {
-      "agentConductor": [{ "id": "agentConductor.sessions", "name": "Sessions" }]
+      "agentConductor": [{ "id": "agentConductor.sessions", "name": "Sessions", "icon": "media/icon.svg" }]
     },
     "menus": {
       "view/title": [{ "command": "agentConductor.newSession", "when": "view == agentConductor.sessions", "group": "navigation" }]
@@ -95,12 +95,17 @@
               "enabled": { "type": "boolean", "default": true },
               "command": { "type": "string" },
               "args": { "type": "array", "items": { "type": "string" } },
-              "env": { "type": "object", "additionalProperties": { "type": "string" } },
+              "secretEnvironment": {
+                "type": "object",
+                "additionalProperties": { "type": "string" },
+                "description": "Environment variable name to VS Code SecretStorage key reference."
+              },
               "defaultModel": { "type": "string" },
               "defaultEffort": { "type": "string", "enum": ["low", "medium", "high", "xhigh", "max"] },
               "suppressBuiltInSubagents": { "type": "boolean", "default": true },
               "safeMode": { "type": "boolean", "default": false }
-            }
+            },
+            "additionalProperties": false
           }
         },
         "agentConductor.defaultRuntime": { "type": "string", "default": "claude" },
@@ -118,7 +123,7 @@
             }
           }
         },
-        "agentConductor.orchestration.enabled": { "type": "boolean", "default": true },
+        "agentConductor.orchestration.enabled": { "type": "boolean", "default": false },
         "agentConductor.orchestration.maxConcurrentSubagents": { "type": "number", "default": 3, "minimum": 1, "maximum": 16 },
         "agentConductor.orchestration.maxSpawnDepth": {
           "type": "number",
@@ -128,18 +133,22 @@
         "agentConductor.orchestration.subagentIsolation": { "type": "string", "enum": ["shared", "worktree"], "default": "worktree" },
         "agentConductor.orchestration.budgetUsdPerSubagent": { "type": "number", "default": 2 },
         "agentConductor.orchestration.defaultSubagentPreset": { "type": "string", "default": "" },
-        "agentConductor.permissions.autoAllow": {
+        "agentConductor.permissions.autoAllowClientOperations": {
           "type": "array",
-          "items": { "type": "string", "enum": ["read", "edit", "delete", "move", "search", "execute", "think", "fetch", "switch_mode", "other"] },
-          "default": ["read", "search"],
-          "description": "ACP ToolKinds approved without prompting."
+          "items": { "type": "string", "enum": ["fs.read", "fs.write", "terminal.spawn", "terminal.wait", "terminal.kill", "terminal.release"] },
+          "default": ["fs.read"],
+          "description": "Client operations approved without prompting; ACP ToolKind is display-only."
         },
-        "agentConductor.permissions.autoReject": { "type": "array", "items": { "type": "string" }, "default": [] },
+        "agentConductor.permissions.autoRejectClientOperations": {
+          "type": "array",
+          "items": { "type": "string", "enum": ["fs.read", "fs.write", "terminal.spawn", "terminal.wait", "terminal.kill", "terminal.release"] },
+          "default": []
+        },
         "agentConductor.permissions.rememberAlwaysChoices": { "type": "boolean", "default": true },
         "agentConductor.claude.hideSubscriptionAuth": {
           "type": "boolean",
-          "default": false,
-          "markdownDescription": "Pass `--hide-claude-auth` to the adapter: forces API-key auth, refusing claude.ai subscription login."
+          "default": true,
+          "markdownDescription": "Pass `--hide-claude-auth` to disable claude.ai subscription credentials; configure API-key or supported cloud-provider authentication for Agent Conductor."
         },
         "agentConductor.gemini.writeWorkspaceSettings": {
           "type": "boolean",

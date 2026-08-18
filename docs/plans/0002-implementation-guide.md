@@ -1,6 +1,6 @@
 # Plan 0002 — Implementation guide (working document)
 
-Status: active · **temporary** — per `AGENTS.md`, nothing in code, comments, or tests may reference this file; promote durable content before deletion. Canonical homes: architecture → `../../ARCHITECTURE.md` · terms → `../../UBIQUITOUS.md` · personas → `../../PERSONAS.md` · decisions → `../adr/` (ADR-0001…0006) · milestones → `0001-mvp-implementation-plan.md`.
+Status: active · **temporary** — per `AGENTS.md`, nothing in code, comments, or tests may reference this file; promote durable content before deletion. Canonical homes: architecture → `../../ARCHITECTURE.md` · terms → `../../UBIQUITOUS.md` · personas → `../../PERSONAS.md` · decisions → `../adr/` (ADR-0001…0010) · milestones → `0001-mvp-implementation-plan.md`.
 
 Scope kept here: the concrete how-to — scaffold, manifest, settings schema, code skeletons, wizard, testing, packaging — plus Appendix A (per-runtime evidence incl. the unverified list).
 
@@ -29,8 +29,8 @@ Built-in catalog (ids fixed, everything overridable in settings):
 
 | id | launch | notes |
 |---|---|---|
-| `claude` | `npx @agentclientprotocol/claude-agent-acp` | adapter; `_meta.claudeCode.options` passthrough; optional `--hide-claude-auth` |
-| `codex` | `npx -y @agentclientprotocol/codex-acp` + `CODEX_CONFIG` env | config is process-scoped → one process per policy |
+| `claude` | `npx @agentclientprotocol/claude-agent-acp --hide-claude-auth` | adapter; `_meta.claudeCode.options` passthrough; subscription auth disabled |
+| `codex` | `npx -y @agentclientprotocol/codex-acp` + `CODEX_CONFIG` env | config is process-scoped; one process per Session |
 | `gemini` | `gemini --acp` | suppression via workspace `.gemini/settings.json` (consent-gated) |
 | `copilot` | `copilot --acp --stdio` + startup flags | model/effort/tools are process-scoped |
 | `custom-*` | user-defined | any ACP agent works |
@@ -41,12 +41,12 @@ At activation (and on demand in the wizard) the RuntimeRegistry refreshes launch
 
 `AcpClient` owns one agent subprocess + connection; `ConductorSession` wraps one ACP session. Lifecycle rules learned from the adapters' behavior:
 
-- One connection can host many sessions, but runtimes with process-scoped config (codex, copilot) get **one process per distinct policy/config tuple**.
+- Every Session owns exactly one Agent process so cancellation fallback and crashes cannot affect another Session.
 - Keep the `mcpServers` array **stable and sorted by name** — claude-agent-acp fingerprints `(cwd, mcpServers)` and respawns the underlying query when it changes.
-- On `session/load`/`resume`, **always re-send `mcpServers`** (codex-acp skips MCP recovery otherwise) and the full `additionalDirectories` list (spec: omitting does not restore).
+- On `session/load`/`resume`, **always re-send `mcpServers`** (codex-acp skips MCP recovery otherwise) and re-send `additionalDirectories` only when supported and authorized.
 - Advertise `clientCapabilities: { fs: {readTextFile:true, writeTextFile:true}, terminal: true, _meta: {"subagent-transcript": true} }`. The `_meta` capability makes claude-agent-acp forward nested subagent text tagged with `parentToolUseId` — without it, any delegation that slips through renders as an opaque tool result.
 - Implement `elicitation/create` (form flavor) or accept that claude-agent-acp silently disables `AskUserQuestion`.
-- Cancellation is two-layered and can hang: send `session/cancel`, await `stopReason:"cancelled"` under a grace timer, then SIGTERM the subprocess as fallback. Parent cancel cascades to tracked children.
+- Cancellation is two-layered and can hang: revoke the Session Capability, send `session/cancel`, await `stopReason:"cancelled"` under a grace timer, then terminate that Session's subprocess as fallback. Parent cancel cascades to tracked children.
 
 ### 8. Model & effort selection
 
@@ -62,7 +62,7 @@ Claude effort×model matrix to encode (v2.1.234): Fable 5 / Opus 5 / Sonnet 5 / 
 
 Decision record: ADR-0004.
 
-`SuppressionPlan` per runtime, applied when `agentConductor.orchestration.enabled` is true:
+`SuppressionPlan` per Runtime is applied only after orchestration opt-in. Shim injection additionally requires current Runtime Trust and Suppression Capability:
 
 | Runtime | Mechanism | Where applied |
 |---|---|---|
@@ -75,7 +75,7 @@ Traps encoded in the plan: Claude's tool is `Agent` — the old name `Task` sile
 
 ### 10. Orchestrator & MCP shim
 
-The shim (`dist/mcp-shim.cjs`, bundled, zero-dependency) is spawned by each harness via the `mcpServers` entry. ACP requires an **absolute** `command` for stdio MCP servers — resolve it; inside VS Code use `process.execPath` with `ELECTRON_RUN_AS_NODE=1` in the env list so no system Node is needed. The shim speaks MCP over stdio and tunnels every tool call to the extension over a token-authenticated unix socket / named pipe.
+The shim (`dist/mcp-shim.cjs`, bundled, zero-dependency) is spawned by eligible harnesses via the `mcpServers` entry. ACP requires an **absolute** `command` for stdio MCP servers — resolve it; inside VS Code use `process.execPath` with `ELECTRON_RUN_AS_NODE=1` in the env list so no system Node is needed. The shim speaks MCP over stdio and tunnels tool calls over a local socket / named pipe using a short-lived Session Capability.
 
 Tools exposed to the model:
 
@@ -85,11 +85,11 @@ Tools exposed to the model:
 | `check_subagent` / `subagent_result` / `cancel_subagent` | background lifecycle |
 | `list_runtimes` | configured runtimes + models + current defaults, so the model can choose intelligently |
 
-Orchestrator invariants: all spawn params optional (defaults from settings/presets); concurrency semaphore (default 3); depth cap (default 1) enforced by **not injecting the shim** into children below the cap — which is also the recursion guard; per-child budget forwarded to runtimes that support it (Claude `--max-budget-usd`); `isolation:"worktree"` runs `git worktree add <root>/<id> -b agent/<id>`, passes it as the child's `cwd`, grants the parent repo read-only via `additionalDirectories`; children default to a read-only toolset unless the brief requires writes; parent cancel cascades; every child result records (runtime, effective model/effort, cost, duration) into the session tree.
+Orchestrator invariants: while disabled, issue no Session Capability, inject no Shim, and expose no spawn RPC. Otherwise all spawn params are optional (defaults from settings/presets); enforce local concurrency, depth, spawn-count, and timeout limits; forward monetary limits only with a Budget Capability; bind provider consent to the target Runtime Trust fingerprint; enforce Depth Cap by **not injecting the Shim** below it. `isolation:"worktree"` serializes Git mutations, journals allocation, and never deletes dirty worktrees automatically. It passes the worktree as child `cwd` and omits the parent repository from `additionalDirectories` by default. Worktrees coordinate changes; they do not restrict Agent access. Parent cancel cascades, and every child result records Runtime, effective model/effort, cost or unknown, and duration.
 
 ### 11. Permission routing, fs, terminals
 
-**Permissions.** Policy first: `autoAllow`/`autoReject` by `ToolKind` (`read`, `search`, `fetch` are sane auto-allows), remembered `allow_always`/`reject_always` per (runtime, tool, workspace) in `workspaceState`. Otherwise a modal `showWarningMessage` with the agent's option names; kind `edit`/`execute`/`delete` get the diff or command line in the detail. Cancelled turn ⇒ respond `cancelled`.
+**Permissions.** Derive a Client Operation from the ACP method and normalized arguments, then apply automatic/remembered policy by that key. `ToolKind` is display-only. Otherwise show a modal with the Agent's option names and Client-derived operation detail. Permission routing is consent/audit, not an Agent sandbox. Cancelled turn ⇒ respond `cancelled`.
 
 **fs/read_text_file** serves **dirty editor buffers first** (`workspace.textDocuments`) — that's the point of the capability — falling back to disk; both handlers validate the path against `cwd` + `additionalDirectories` and refuse outside it. **fs/write_text_file** applies through `WorkspaceEdit` when the file is open (preserves undo) else writes to disk.
 
@@ -116,9 +116,9 @@ Participant slash commands (static, ours): `/runtime`, `/model`, `/effort`, `/sp
 
 ### 13. Security posture
 
-Auth decision record: ADR-0006.
+Auth decision record: ADR-0010 (supersedes ADR-0006).
 
-Workspace trust gate: refuse to launch agents in untrusted workspaces (`workspace.isTrusted`) — headless Claude sessions skip the CLI's own trust dialog and will run a repo's `.claude/settings.json` hooks and `.mcp.json` servers, which is an RCE footgun; offer `--bare`/`--safe-mode` per-runtime for cloned repos. API keys live in `context.secrets`, injected as env at spawn, never logged. Shim socket carries a per-window random token; reject non-token clients. Auth compliance: default Claude to the user's existing CLI login but expose `agentConductor.claude.hideSubscriptionAuth` (adapter's `--hide-claude-auth`) and a first-run notice — Anthropic's ToS prohibits routing third-party products through Pro/Max credentials, and parallel fan-out is exactly the pattern most likely to trip enforcement; re-check the policy before shipping. Budgets: `--max-budget-usd` per Claude child; global concurrency cap; stall timeout per child.
+Workspace trust and Runtime Trust gate every spawn. Runtime Trust fingerprints the canonical artifact plus effective launch specification and is re-verified on each spawn. Safe-mode flags reduce repository exposure but are not a sandbox. Secret values and sensitive resume tokens live in `context.secrets`; settings and Persisted Sessions contain references only. Claude defaults to `--hide-claude-auth` and requires API-key or supported cloud-provider credentials. Re-check provider policy before release. Session Capabilities are bound to parent, depth, roots, methods, expiry, and current trust; cancellation, parent termination, trust invalidation, and orchestration disablement revoke them immediately.
 
 ### 14. Core/UI seam
 
@@ -244,13 +244,13 @@ The proposed-API build adds `"enabledApiProposals": ["chatSessionsProvider", "ch
         "enabled":       { "type": "boolean", "default": true },
         "command":       { "type": "string" },
         "args":          { "type": "array", "items": { "type": "string" } },
-        "env":           { "type": "object", "additionalProperties": { "type": "string" } },
+        "secretEnvironment": { "type": "object", "additionalProperties": { "type": "string" } },
         "defaultModel":  { "type": "string" },
         "defaultEffort": { "type": "string", "enum": ["low","medium","high","xhigh","max"] },
         "suppressBuiltInSubagents": { "type": "boolean", "default": true },
         "safeMode":      { "type": "boolean", "default": false,
                            "description": "Claude: pass --bare/--safe-mode (skips repo hooks & .mcp.json — recommended for cloned repos)" }
-      }}},
+      }, "additionalProperties": false}},
     "agentConductor.defaultRuntime":  { "type": "string", "default": "claude" },
     "agentConductor.presets": {
       "type": "object", "scope": "resource",
@@ -258,7 +258,7 @@ The proposed-API build adds `"enabledApiProposals": ["chatSessionsProvider", "ch
       "additionalProperties": { "type": "object", "properties": {
         "runtime": {"type":"string"}, "model": {"type":"string"}, "effort": {"type":"string"} }}},
 
-    "agentConductor.orchestration.enabled":               { "type": "boolean", "default": true },
+    "agentConductor.orchestration.enabled":               { "type": "boolean", "default": false },
     "agentConductor.orchestration.maxConcurrentSubagents":{ "type": "number",  "default": 3, "minimum": 1, "maximum": 16 },
     "agentConductor.orchestration.maxSpawnDepth":         { "type": "number",  "default": 1,
       "description": "Depth below which the orchestrator MCP server is not injected (recursion guard)." },
@@ -266,15 +266,15 @@ The proposed-API build adds `"enabledApiProposals": ["chatSessionsProvider", "ch
     "agentConductor.orchestration.budgetUsdPerSubagent":  { "type": "number",  "default": 2 },
     "agentConductor.orchestration.defaultSubagentPreset": { "type": "string",  "default": "" },
 
-    "agentConductor.permissions.autoAllow": { "type": "array", "items": { "type": "string",
-      "enum": ["read","edit","delete","move","search","execute","think","fetch","switch_mode","other"] },
-      "default": ["read","search"],
-      "description": "ACP ToolKinds approved without prompting." },
-    "agentConductor.permissions.autoReject": { "type": "array", "items": { "type": "string" }, "default": [] },
+    "agentConductor.permissions.autoAllowClientOperations": { "type": "array", "items": { "type": "string",
+      "enum": ["fs.read","fs.write","terminal.spawn","terminal.wait","terminal.kill","terminal.release"] },
+      "default": ["fs.read"],
+      "description": "Client operations approved without prompting; ACP ToolKind is display-only." },
+    "agentConductor.permissions.autoRejectClientOperations": { "type": "array", "items": { "type": "string" }, "default": [] },
     "agentConductor.permissions.rememberAlwaysChoices": { "type": "boolean", "default": true },
 
-    "agentConductor.claude.hideSubscriptionAuth": { "type": "boolean", "default": false,
-      "markdownDescription": "Pass `--hide-claude-auth` to the adapter: forces API-key auth, refusing claude.ai subscription login. See Anthropic's usage policy before enabling subscription-backed fan-out." },
+    "agentConductor.claude.hideSubscriptionAuth": { "type": "boolean", "default": true,
+      "markdownDescription": "Disable claude.ai subscription credentials; configure API-key or supported cloud-provider authentication." },
     "agentConductor.gemini.writeWorkspaceSettings": { "type": "boolean", "default": false,
       "description": "Allow merging subagent-suppression keys into the workspace .gemini/settings.json (asked once by the wizard)." },
 
@@ -344,11 +344,12 @@ export async function connectRuntime(rt: RuntimeSpec, svc: ClientServices) {
 **`session/new` with orchestration policy (inside `runConnectionLoop`):**
 
 ```ts
-const mcpServers = orchestration.enabled && depth < cfg.maxSpawnDepth
+const mcpServers = orchestration.enabled && runtimeTrust.current && suppression.current
+  && depth < cfg.maxSpawnDepth
   ? [{
       name: "orchestrator",
       command: process.execPath,                       // absolute — spec requires it
-      args: [ctx.shimPath, "--socket", ipc.socketPath, "--token", ipc.token],
+      args: [ctx.shimPath, "--socket", ipc.socketPath, "--capability", sessionCapability],
       env: [{ name: "ELECTRON_RUN_AS_NODE", value: "1" }],
     }]
   : [];
@@ -376,7 +377,8 @@ for (;;) {
 ```ts
 async handle(p: RequestPermissionParams): Promise<RequestPermissionResponse> {
   if (this.turnCancelled(p.sessionId)) return { outcome: { outcome: "cancelled" } }; // spec
-  const auto = this.policy.decide(p.toolCall);           // autoAllow/autoReject by ToolKind + remembered
+  const operation = classifyClientOperation(p);          // method + normalized arguments
+  const auto = this.policy.decide(operation);             // ToolKind is display-only
   if (auto) return { outcome: { outcome: "selected", optionId: auto } };
 
   const pick = await vscode.window.showWarningMessage(
@@ -437,17 +439,19 @@ Sequential QuickInput flow; every step cancellable; state carried forward so ⟵
              + npx present? + ACP registry (cached) for adapter launch specs
              → QuickPick (multi): "✓ claude 2.1.234 — via claude-agent-acp adapter",
                "✗ codex — not found (npm i -g @openai/codex)", "＋ Custom ACP agent…"
-2 Configure  per selection: launch spec prefilled from catalog/registry; custom → command+args input
+2 Configure  per selection: launch spec prefilled from catalog/registry; custom → command+args input;
+             approve Runtime Trust fingerprint (artifact + effective launch specification)
 3 Auth       protocol-clean probe: spawn → initialize → session/new in a temp dir.
              -32000 auth_required / authMethods present →
-               open a VS Code terminal with rt.loginCommand ("claude /login", "codex login",
-               "copilot /login", gemini first-run OAuth) → "Press Continue when done" → retry.
+               Claude → configure API-key or supported cloud-provider secret reference;
+               other Runtimes → open their permitted login command → "Press Continue when done" → retry.
 4 Models     from the probe session read configOptions:
                category "model"        → defaultModel QuickPick
                category "thought_level"→ defaultEffort QuickPick
              absent → catalog fallback (+ live `cursor-agent --list-models` style enumeration)
-5 Policy     toggles: suppress built-in subagents (default on) · permission autoAllow kinds ·
-             per-subagent budget · [claude] safe mode + hideSubscriptionAuth ·
+5 Policy     orchestration opt-in · verified suppression · Client Operation allow/reject keys ·
+             local limits + supported per-subagent budget · [claude] safe mode ·
+             target Runtime/provider fingerprint consent ·
              [gemini] consent to write workspace .gemini/settings.json
 6 Smoke test session/prompt "Reply with exactly: OK" under withProgress;
              show streamed reply + EFFECTIVE model/effort read back; surface mismatch here
@@ -475,7 +479,7 @@ Moved to `0001-mvp-implementation-plan.md`.
 
 | Runtime | Launch | Suppression | Model | Effort | Auth probe hint |
 |---|---|---|---|---|---|
-| claude | `npx @agentclientprotocol/claude-agent-acp` | `_meta.claudeCode.options.disallowedTools:["Agent","SendMessage","ListAgents"], agents:{}` | configOptions `model` (aliases: fable/opus/sonnet/haiku/…) | configOptions `effort` — clamps silently; read back | `claude /login` in terminal |
+| claude | `npx @agentclientprotocol/claude-agent-acp --hide-claude-auth` | `_meta.claudeCode.options.disallowedTools:["Agent","SendMessage","ListAgents"], agents:{}` | configOptions `model` (aliases: fable/opus/sonnet/haiku/…) | configOptions `effort` — clamps silently; read back | API-key or supported cloud-provider secret reference |
 | codex | `CODEX_CONFIG='{"agents":{"enabled":false},"features":{"multi_agent_v2":false}}' npx -y @agentclientprotocol/codex-acp` | via `CODEX_CONFIG` (process-scoped) | configOptions (gpt-5.6-sol/terra/luna, …) | configOptions `reasoning_effort` (minimal…xhigh; max/ultra unverified) | `codex login` |
 | gemini | `gemini --acp` | workspace `.gemini/settings.json` merge (consent) | `-m` / configOptions if exposed | none (thinkingBudget only) | first-run OAuth in terminal |
 | copilot | `copilot --acp --stdio --excluded-tools "task,read_agent" --model=… --effort=…` | startup flags (process-scoped; one process per model×effort) | startup flag only | startup flag only (low/med/high verified; xhigh flaky) | `copilot` → `/login` |

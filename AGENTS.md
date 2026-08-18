@@ -30,8 +30,8 @@ Markdown is the default doc format. Root-level canon is exactly: `AGENTS.md`, `U
 - TypeScript `strict` is on; no `any` without an inline reason comment.
 - ACP discipline: protocol v1 only; every path absolute; `mcpServers` arrays sorted by name (session fingerprinting); on `session/load`/`resume`, always re-send `mcpServers` and `additionalDirectories`.
 - Model and effort lists are **never hardcoded** — discovery via `configOptions`, catalog fallback, and mandatory effective-value read-back (ADR-0005).
-- Permission routing is never bypassed; no auto-approve defaults beyond the `autoAllow` ToolKinds setting; a cancelled turn answers `{"outcome":"cancelled"}`.
-- Secrets live in VS Code `SecretStorage`, injected as env at spawn, never logged, never in settings JSON.
+- Permission routing is never bypassed; automatic policy uses Client Operations derived from method + normalized arguments, never Agent-supplied `ToolKind`; a cancelled turn answers `{"outcome":"cancelled"}`.
+- Secrets live in VS Code `SecretStorage`; settings hold opaque references, resolved values are injected as env at spawn, and values are never logged or written to settings JSON.
 - External claims about CLIs and protocols go stale weekly — verify against primary sources before relying; the current unverified list is `docs/plans/0002-implementation-guide.md` Appendix A.
 
 ## MUST: Never reference a planning document

@@ -12,6 +12,12 @@ make check      # build + lint + unit tests (no live CLIs needed)
 
 Open the folder in VS Code and press **F5** (Run Extension). In the dev host: run *Agent Conductor: Connect a CLI…* or mention **@conductor** in Chat.
 
+## Security defaults
+
+Agent executables are trusted code, not sandboxed plugins. Connecting a Runtime records approval for its resolved launch fingerprint; changed executables require renewed trust. Cross-runtime orchestration is off until explicitly enabled, and worktrees coordinate changes without restricting Agent filesystem access.
+
+Claude launches disable claude.ai subscription authentication by default. Configure API-key or supported cloud-provider credentials through VS Code SecretStorage; settings contain references, never secret values. Permission policy classifies Client filesystem and terminal operations independently of Agent-supplied `ToolKind`.
+
 Everyday targets (`make help` for all):
 
 | Target | Does |
