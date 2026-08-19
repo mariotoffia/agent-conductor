@@ -8,8 +8,9 @@ export function activate(context: vscode.ExtensionContext): void {
 
   context.subscriptions.push(
     vscode.commands.registerCommand("agentConductor.connectCli", async () => {
-      // Wizard: detect → configure → auth probe → model discovery → policy →
-      // smoke test → save (docs/plans has the full flow while it is built out).
+      // Connect-a-CLI wizard: detect → configure → Probe Session (auth check and
+      // Config Option discovery) → policy → Smoke Test → save. Only the detect
+      // step exists so far.
       const runtimes = builtinRuntimes({ suppressBuiltInSubagents: true });
       const picked = await vscode.window.showQuickPick(
         runtimes.map((r) => ({ label: r.displayName, description: r.id })),

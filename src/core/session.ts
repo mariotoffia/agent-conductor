@@ -1,4 +1,3 @@
-import { isAbsolute } from "node:path";
 import * as acp from "@agentclientprotocol/sdk";
 import {
   connectAgent,
@@ -11,10 +10,24 @@ import {
   withDeadline,
   type AgentConnection,
 } from "./acpClient.js";
-import type { AgentExit, ClockPort, LaunchSpec, LogLevel, SessionPorts } from "./types.js";
+import {
+  asConfigOptions,
+  discoverConfig,
+  readBack,
+  selectorSlot,
+  type DiscoveredConfig,
+} from "./discovery.js";
+import { sortMcpServers, validateSessionSpec, type SessionSpec } from "./sessionSpec.js";
+import type { AgentExit, ClockPort, EffectiveSelection, LogLevel, SessionPorts } from "./types.js";
 
 /** Lifecycle of one Session. A Session never leaves `disposed` or `failed`. */
-export type SessionState = "idle" | "prompting" | "cancelling" | "failed" | "disposed";
+export type SessionState =
+  | "idle"
+  | "configuring"
+  | "prompting"
+  | "cancelling"
+  | "failed"
+  | "disposed";
 
 /** How long a cancelled turn may keep running before its process is terminated. */
 export const DEFAULT_CANCEL_GRACE_MS = 5_000;
@@ -24,31 +37,6 @@ export const DEFAULT_CANCEL_GRACE_MS = 5_000;
  * silent on the wire, and ending such a Turn early would destroy real work.
  */
 export const DEFAULT_STALL_TIMEOUT_MS = 600_000;
-
-export interface SessionSpec {
-  /** Runtime identity, used in logs and failure messages. */
-  runtimeId: string;
-  /** Resolved absolute command, arguments, and catalog policy environment. */
-  launch: LaunchSpec;
-  /** Absolute session working directory. */
-  cwd: string;
-  /** Values resolved from SecretStorage by the UI adapter. Never logged. */
-  secretEnvironment?: Record<string, string>;
-  /** Extra absolute roots; sent only when the Agent advertises support. */
-  additionalDirectories?: string[];
-  /** Re-sent verbatim on load; always ordered by name before it goes out. */
-  mcpServers?: acp.McpServer[];
-  /** Per-session policy channel, e.g. a Suppression Plan (ADR-0004). */
-  sessionMeta?: Record<string, unknown>;
-  cancelGraceMs?: number;
-  /** Deadline for the handshake and for creating or loading the session. */
-  setupTimeoutMs?: number;
-  /** Silence allowed within a Turn before it is ended; `0` disables the limit. */
-  stallTimeoutMs?: number;
-  clientVersion?: string;
-  /** Every Update the Agent sends, including any whose `sessionId` is not ours. */
-  onUpdate?: (notification: acp.SessionNotification) => void;
-}
 
 /**
  * One ACP session on one Agent process (ADR-0008).
@@ -64,6 +52,8 @@ export class ConductorSession {
   #connection?: AgentConnection;
   #sessionId = "";
   #configOptions: acp.SessionConfigOption[] = [];
+  #requestedModel?: string;
+  #requestedEffort?: string;
   #state: SessionState = "idle";
   #cancelRequested = false;
   #clearCancelGrace?: () => void;
@@ -84,6 +74,8 @@ export class ConductorSession {
     this.#spec = spec;
     this.#ports = ports;
     this.#clock = ports.clock ?? systemClock;
+    this.#requestedModel = spec.requestedModel;
+    this.#requestedEffort = spec.requestedEffort;
   }
 
   /** Spawns the Agent and creates a new session (`session/new`). */
@@ -125,9 +117,95 @@ export class ConductorSession {
     return this.#requireConnection().handshake;
   }
 
-  /** Latest complete Config Option array reported by the Agent (ADR-0005). */
+  /**
+   * Latest complete Config Option array reported by the Agent (ADR-0005).
+   *
+   * ponytail: handed out by reference. Harmless while only `config` and tests
+   * read it — a caller that mutates or retains it would be our own code, not
+   * the untrusted Agent this Session guards against. Copy on the way out once
+   * view code consumes it directly.
+   */
   get configOptions(): acp.SessionConfigOption[] {
     return this.#configOptions;
+  }
+
+  /** Those Config Options split into the pickers the conductor drives. */
+  get config(): DiscoveredConfig {
+    return discoverConfig(this.#configOptions);
+  }
+
+  /** What was asked for beside what the Agent reports running (ADR-0005). */
+  get modelSelection(): EffectiveSelection {
+    return readBack(this.config.model, this.#requestedModel);
+  }
+
+  get effortSelection(): EffectiveSelection {
+    return readBack(this.config.effort, this.#requestedEffort);
+  }
+
+  /**
+   * Sets one Config Option and adopts the complete array the Agent answers with.
+   *
+   * Only between Turns: a Runtime that applies the change to the Turn already in
+   * flight would silently rewrite the configuration that Turn started under.
+   * Boolean options are not settable — the Client does not advertise the boolean
+   * Config Option capability, so it must not send boolean values either.
+   */
+  async setConfigOption(configId: string, value: string): Promise<DiscoveredConfig> {
+    const connection = this.#requireConnection();
+    if (this.#state !== "idle") {
+      throw new Error(`session ${this.#sessionId} is ${this.#state}; it cannot set a config option`);
+    }
+    const target = this.#configOptions.find((option) => option.id === configId);
+    if (!target) {
+      throw new Error(`session ${this.#sessionId}: unknown config option "${configId}"`);
+    }
+    if (target.type !== "select") {
+      throw new Error(
+        `session ${this.#sessionId}: config option "${configId}" is not a select;` +
+          " this client does not advertise boolean config options",
+      );
+    }
+    // Read before the array is replaced: the refreshed one need not still carry
+    // the option that was just set.
+    const slot = selectorSlot(this.config, configId);
+    // Busy for the whole exchange, so no Turn can start under a configuration
+    // that is still being changed and no second set can race this one's answer.
+    this.#state = "configuring";
+    try {
+      const response = await this.#bounded(
+        connection.agent.request(acp.methods.agent.session.setConfigOption, {
+          sessionId: this.#sessionId,
+          configId,
+          value,
+        }),
+        "session/set_config_option",
+      );
+      // Asking is not getting: the Agent may clamp, and Read-back shows both.
+      if (slot === "model") this.#requestedModel = value;
+      if (slot === "effort") this.#requestedEffort = value;
+      // The Agent answers with the complete refreshed array; never merge into
+      // the one it replaces (ADR-0005).
+      if (!Array.isArray(response.configOptions)) {
+        throw new Error(
+          `session ${this.#sessionId}: agent answered session/set_config_option without config options`,
+        );
+      }
+      this.#configOptions = asConfigOptions(response.configOptions);
+      return this.config;
+    } catch (error) {
+      // An exchange that did not complete leaves the Agent's configuration
+      // genuinely unknown: it may have applied the change, answered nothing
+      // useful, or died. Keeping the array from before the request would let
+      // Read-back go on calling a superseded value verified, so the Session
+      // forgets it instead. The pickers survive on the catalog fallback.
+      this.#configOptions = [];
+      throw error;
+    } finally {
+      // Never over a state the exchange itself produced: the process can die,
+      // or the Session be disposed, while the Agent is still deciding.
+      if (this.#state === "configuring") this.#state = "idle";
+    }
   }
 
   get pid(): number | undefined {
@@ -252,7 +330,7 @@ export class ConductorSession {
       this.#exit = exit;
       if (this.#state === "disposed") return;
       this.#log("error", `session ${this.#sessionId}: agent process ended unexpectedly`);
-      if (this.#state === "idle") this.#state = "failed";
+      if (this.#state === "idle" || this.#state === "configuring") this.#state = "failed";
     });
     try {
       await (sessionId === undefined ? this.#createSession() : this.#loadSession(sessionId));
@@ -271,7 +349,7 @@ export class ConductorSession {
   }
 
   async #createSession(): Promise<void> {
-    const response = await this.#withinSetup(
+    const response = await this.#bounded(
       this.#requireConnection().agent.request(acp.methods.agent.session.new, {
         cwd: this.#spec.cwd,
         mcpServers: sortMcpServers(this.#spec.mcpServers),
@@ -281,7 +359,7 @@ export class ConductorSession {
       "session/new",
     );
     this.#sessionId = response.sessionId;
-    this.#configOptions = response.configOptions ?? [];
+    this.#configOptions = asConfigOptions(response.configOptions);
   }
 
   async #loadSession(sessionId: string): Promise<void> {
@@ -290,7 +368,7 @@ export class ConductorSession {
       throw new Error("agent does not support session/load");
     }
     this.#sessionId = sessionId;
-    const response = await this.#withinSetup(
+    const response = await this.#bounded(
       connection.agent.request(acp.methods.agent.session.load, {
         sessionId,
         cwd: this.#spec.cwd,
@@ -301,11 +379,12 @@ export class ConductorSession {
       }),
       "session/load",
     );
-    this.#configOptions = response?.configOptions ?? [];
+    this.#configOptions = asConfigOptions(response?.configOptions);
   }
 
-  /** Bounds a setup request: a Runtime that never answers must not pend. */
-  #withinSetup<T>(work: Promise<T>, method: string): Promise<T> {
+  /** Bounds a request on the Setup Deadline: a Runtime that never answers must
+   *  not leave a caller pending with no way back. */
+  #bounded<T>(work: Promise<T>, method: string): Promise<T> {
     const ms = this.#spec.setupTimeoutMs ?? DEFAULT_SETUP_TIMEOUT_MS;
     return withDeadline(work, ms, this.#clock, () =>
       new Error(`agent did not answer ${method} within ${ms}ms`));
@@ -365,7 +444,7 @@ export class ConductorSession {
     const ours = this.#sessionId === "" || notification.sessionId === this.#sessionId;
     // A complete refreshed array, prompted or not; always render the latest.
     if (ours && notification.update.sessionUpdate === "config_option_update") {
-      this.#configOptions = notification.update.configOptions;
+      this.#configOptions = asConfigOptions(notification.update.configOptions);
     }
     this.#spec.onUpdate?.(notification);
   }
@@ -403,34 +482,4 @@ export class ConductorSession {
   #log(level: LogLevel, text: string): void {
     this.#ports.log?.log(level, text);
   }
-}
-
-/** ACP requires absolute paths everywhere; reject before anything is spawned. */
-export function validateSessionSpec(spec: SessionSpec): void {
-  if (!isAbsolute(spec.cwd)) {
-    throw new Error(`runtime ${spec.runtimeId}: session cwd must be absolute, got "${spec.cwd}"`);
-  }
-  for (const directory of spec.additionalDirectories ?? []) {
-    if (!isAbsolute(directory)) {
-      throw new Error(
-        `runtime ${spec.runtimeId}: additional directory must be absolute, got "${directory}"`,
-      );
-    }
-  }
-  for (const server of spec.mcpServers ?? []) {
-    if ("command" in server && !isAbsolute(server.command)) {
-      throw new Error(
-        `runtime ${spec.runtimeId}: mcp server "${server.name}" command must be absolute,` +
-          ` got "${server.command}"`,
-      );
-    }
-  }
-}
-
-/**
- * Orders MCP servers by name with a codepoint comparison — locale-aware sorting
- * would differ per machine, and agents fingerprint `(cwd, mcpServers)`.
- */
-export function sortMcpServers(servers: acp.McpServer[] = []): acp.McpServer[] {
-  return [...servers].sort((left, right) => (left.name < right.name ? -1 : left.name > right.name ? 1 : 0));
 }

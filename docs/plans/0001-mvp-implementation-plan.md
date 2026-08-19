@@ -196,10 +196,10 @@ Canonical docs require resume and a second rendering sink but define neither the
 
 ### Task 4: Implement Config Option discovery and Read-back
 
-**Files:** Create `src/core/discovery.ts`, `src/test/unit/config_discovery.test.ts`; modify `src/core/types.ts`, `src/core/session.ts`.
+**Files:** Create `src/core/discovery.ts`, `src/test/unit/config_discovery.test.ts`, `src/test/unit/config_readback_session.test.ts`, `src/core/sessionSpec.ts`; modify `src/core/types.ts`, `src/core/session.ts`, `src/test/mock-agent.ts`.
 
-- [ ] Test category-based model/thought-level extraction, uncategorized preservation, complete-array replacement, unsolicited updates, changed valid values, mismatch detection, and unavailable Read-back.
-- [ ] Represent selection state explicitly:
+- [x] Test category-based model/thought-level extraction, uncategorized preservation, complete-array replacement, unsolicited updates, changed valid values, mismatch detection, and unavailable Read-back.
+- [x] Represent selection state explicitly:
 
 ```ts
 interface EffectiveSelection {
@@ -209,8 +209,8 @@ interface EffectiveSelection {
 }
 ```
 
-- [ ] Never synthesize model lists. Use catalog fallback only when Config Options are absent, and never call a fallback requested value effective without Agent evidence.
-- [ ] Run `node --import tsx --test src/test/unit/config_discovery.test.ts`; expect pass. Commit: `feat: add config discovery and read-back`.
+- [x] Never synthesize model lists. Use catalog fallback only when Config Options are absent, and never call a fallback requested value effective without Agent evidence.
+- [x] Run `node --import tsx --test src/test/unit/config_discovery.test.ts`; expect pass. Commit: `feat: add config discovery and read-back`.
 
 ### Task 5: Make Runtime resolution secure and offline-safe
 

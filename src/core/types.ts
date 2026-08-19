@@ -129,3 +129,14 @@ export interface SessionPorts {
   terminal?: TerminalPort;
   elicitation?: ElicitationPort;
 }
+
+/**
+ * A requested model or effort value beside the one the Agent reports as
+ * effective. Agents clamp silently, so the two are tracked separately and the
+ * effective value is only ever set on the Agent's own evidence (ADR-0005).
+ */
+export interface EffectiveSelection {
+  requested?: string;
+  effective?: string;
+  verification: "verified" | "unavailable";
+}

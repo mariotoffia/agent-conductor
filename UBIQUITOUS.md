@@ -15,13 +15,14 @@ Code identifiers, settings keys, docs, and commit messages use these words with 
 | **Session** | One ACP session on one Runtime (`ConductorSession` wraps it). |
 | **Persisted Session** | Versioned, metadata-only Session record. Sensitive resume-token values live in SecretStorage, never in the record. |
 | **Turn** | One `session/prompt` → stop-reason cycle. |
-| **Setup Deadline** | How long a Runtime may take to answer *each* setup request — the handshake, then Session creation — before the Client abandons it and terminates its process. |
+| **Setup Deadline** | How long a Runtime may take to answer *each* request the Client makes outside a Turn — the handshake, Session creation, and setting a Config Option — before the Client abandons it. Abandoning setup terminates the process; abandoning a later request leaves the Session usable. |
 | **Stall Limit** | How long a Turn may go without any Agent activity before the Client ends it. Time the Client owes the Agent an answer does not count. |
 | **Cancel Grace** | How long a cancelled Turn may keep running after `session/cancel` before the Client terminates that Session's Agent process. |
 | **Update** | One `session/update` notification variant (message/thought chunk, tool_call, plan, …). |
-| **Config Option** | ACP `configOptions` entry; categories `model`, `thought_level`, `mode`, `model_config`. The only sanctioned model/effort channel. |
+| **Config Option** | ACP `configOptions` entry; categories `model`, `thought_level`, `mode`, `model_config`. The only sanctioned model/effort channel. Categories are UX hints, so an option is taken for a picker only when its category matches *and* it is a `select`; everything else is preserved and rendered as-is. The Client does not advertise the boolean Config Option capability and never sets a boolean option. |
 | **Effort** | Reasoning/thought level (`low…max`). Always advisory — see Read-back. |
-| **Read-back** | Surfacing the *effective* model/effort reported by the agent after clamping, next to what was requested. Mandatory. |
+| **Read-back** | Surfacing the *effective* model/effort reported by the agent after clamping, next to what was requested. Mandatory. An effective value exists only on the agent's own evidence; without it the selection is *unavailable*, never assumed to be what was requested. |
+| **Requested vs Effective** | The two halves of a Read-back. *Requested* is what the user asked for, however asked — a Preset, a Config Option set, or argv on a process-scoped Runtime. *Effective* is what the agent reports running. A verified selection whose two halves differ is a **mismatch**; an unverified one is unknown, never a mismatch. |
 | **Preset** | Named (runtime, model, effort) tuple in settings; default source for spawns. |
 | **Persona** | A role with scope + guardrails (`PERSONAS.md`); maps onto a Preset when spawned as a subagent. |
 | **Subagent** | A child Session created by the Orchestrator on any Runtime. Shares no conversation context with its parent. |

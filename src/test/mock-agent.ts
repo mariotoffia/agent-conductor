@@ -49,6 +49,43 @@ const refreshedConfigOptions: acp.SessionConfigOption[] = [
   },
 ];
 
+/** True when a select option still lists `value` among its choices. */
+function offers(
+  option: acp.SessionConfigOption & { type: "select" },
+  value: string | boolean,
+): value is string {
+  return option.options.some((entry) =>
+    "group" in entry
+      ? entry.options.some((choice) => choice.value === value)
+      : entry.value === value);
+}
+
+/**
+ * What an agent can actually put on the wire: the response types are not
+ * schema-checked on the client side, so these shapes reach a client despite
+ * being impossible according to `SessionConfigOption`. The last entry is a
+ * well-formed boolean option — legal, but not something a client may set
+ * without advertising the boolean config option capability.
+ */
+const badConfigOptions = [
+  null,
+  "not an option",
+  { type: "select", id: "no-values", name: "No values", category: "model", currentValue: "x", options: null },
+  { type: "select", id: "junk-values", name: "Junk", category: "model", currentValue: "x", options: {} },
+  { type: "select", id: "grouped", name: "Grouped", category: "model", currentValue: "x", options: [{ group: "g", name: "G", options: null }] },
+  { type: "select", id: "numeric", name: "Numeric", category: "thought_level", currentValue: 42, options: [] },
+  { type: "boolean", id: "posing", name: "Posing as a model", category: "model", currentValue: true },
+  { type: "boolean", id: "web", name: "Web search", currentValue: false },
+  // Deliberately ill-typed: the point is what an agent can send, not what the
+  // schema permits.
+] as unknown as acp.SessionConfigOption[];
+
+function configOptionsFor(agentMode: string): { configOptions?: acp.SessionConfigOption[] } {
+  if (agentMode === "no-config-options") return {};
+  if (agentMode === "bad-config-options") return { configOptions: badConfigOptions };
+  return { configOptions };
+}
+
 const promptCounts = new Map<string, number>();
 let nextSession = 1;
 const sessions = new Map<string, acp.NewSessionRequest>();
@@ -89,7 +126,10 @@ const app = acp
     sessions.set(sessionId, context.params);
     return {
       sessionId,
-      configOptions,
+      // `no-config-options` exposes no model or effort selector at all, so
+      // read-back has nothing to verify against; `bad-config-options` exposes
+      // shapes no client may trust.
+      ...configOptionsFor(mode),
       _meta: { receivedRequest: context.params },
     };
   })
@@ -308,6 +348,23 @@ const app = acp
       },
     });
     return { stopReason: "end_turn" };
+  })
+  .onRequest(acp.methods.agent.session.setConfigOption, (context) => {
+    // Answers with the complete refreshed array, honouring the requested value
+    // only when the refreshed option still offers it — otherwise the agent's
+    // own current value stands, which is what clamping looks like on the wire.
+    const { configId, value } = context.params;
+    // `bad-set-response` violates the schema the way a nonconforming agent can:
+    // the response type promises an array and no array arrives.
+    if (mode === "bad-set-response") return {} as acp.SetSessionConfigOptionResponse;
+    // `hang-set` accepts the request and never answers it.
+    if (mode === "hang-set") return new Promise<never>(() => undefined);
+    return {
+      configOptions: refreshedConfigOptions.map((option) =>
+        option.id === configId && option.type === "select" && offers(option, value)
+          ? { ...option, currentValue: value }
+          : option),
+    };
   })
   .onNotification(acp.methods.agent.session.cancel, (context) => {
     pendingCancellations.get(context.params.sessionId)?.();
