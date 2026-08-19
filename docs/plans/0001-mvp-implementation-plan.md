@@ -16,7 +16,7 @@ Status: active. Plans are temporary; promote durable decisions to ADRs or canoni
 
 | Deliverable | Exit criterion | Status |
 |---|---|---|
-| Core ACP client and mock Agent | Handshake, prompt, Updates, cancel, and permissions covered by unit tests | Pending |
+| Core ACP client and mock Agent | Handshake, prompt, Updates, cancel, and permissions covered by unit tests | Mock Agent done; ACP client pending |
 | Stable direct Session | `@conductor` streams messages, thoughts, tool calls, diffs, permissions, usage, and Read-back | Pending |
 | Wizard, settings, and multiple Runtimes | Claude, Codex, Gemini, and Copilot can be validated and configured from live Config Options | Pending |
 | Orchestrator | Suppression, authenticated Shim tools, worktrees, limits, cancellation cascade, and Sessions tree pass integration tests | Pending |
@@ -176,17 +176,18 @@ Canonical docs require resume and a second rendering sink but define neither the
 
 ### Task 2: Build the mock ACP Agent before production protocol code
 
-**Files:** Create `src/test/mock-agent.ts`, `src/test/unit/acp_client.test.ts`; modify `package.json`, `Makefile`.
+**Files:** Create `src/test/mock-agent.ts`, `src/test/unit/mock_agent.test.ts`; modify `package.json`.
 
-- [ ] Implement a deterministic stdio ACP v1 Agent using the pinned SDK's actual APIs. It must script initialize/auth methods, Session creation, two Config Options, message/thought/tool/diff/plan/usage updates, permission requests, cancellation, load, and malformed/timeout modes.
-- [ ] Write failing tests for initialize, absolute `cwd`, stable sorted `mcpServers`, capability-conditional `additionalDirectories`, prompt updates, permission forwarding, cancellation grace fallback, load/resume reinjection, malformed stdout, stderr capture, and child exit.
-- [ ] Make `make test` include every `src/test/unit/**/*.test.ts` file rather than a single directory glob.
-- [ ] Run the ACP client tests; expect failures because `src/core/acpClient.ts` does not exist. Commit: `test: define ACP client contract`.
+- [x] Implement a deterministic stdio ACP v1 Agent using the pinned SDK's actual APIs. It scripts initialize/auth methods, Session creation, two Config Options, message/thought/tool/diff/plan/usage updates, permission requests, cancellation, load, and malformed/timeout modes.
+- [x] Test the mock Agent as a real subprocess, including Session setup/reinjection capture, prompt updates, permission forwarding, cooperative cancellation, malformed stdout, stderr, timeout, and child-exit modes.
+- [x] Make `make test` include every `src/test/unit/**/*.test.ts` file rather than a single directory glob.
+- [x] Run the focused mock Agent tests, then `make lint && make test`; expect exit 0. Commit: `test: add deterministic ACP mock agent`.
 
 ### Task 3: Implement one-process-per-Session ACP lifecycle
 
 **Files:** Create `src/core/acpClient.ts`, `src/core/session.ts`; modify `src/core/types.ts`, `src/core/index.ts`.
 
+- [ ] Write failing client contract tests for initialize, absolute `cwd`, stable sorted `mcpServers`, capability-conditional `additionalDirectories`, prompt updates, permission forwarding, cancellation grace fallback, load/resume reinjection, malformed stdout, stderr capture, and child exit.
 - [ ] Define narrow ports for permission, fs, terminal, elicitation, logging, clocks, and process spawning. Do not import `vscode`.
 - [ ] Spawn only validated absolute commands with `shell: false`, inherited non-secret environment, catalog policy environment, and resolved SecretStorage values supplied by the UI adapter.
 - [ ] Implement initialize, `session/new`, `session/load`, prompt/update dispatch, Config Option notifications, cancel grace timer, SIGTERM fallback, child-exit failure, and idempotent dispose.
