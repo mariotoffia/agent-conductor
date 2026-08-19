@@ -16,7 +16,7 @@ Status: active. Plans are temporary; promote durable decisions to ADRs or canoni
 
 | Deliverable | Exit criterion | Status |
 |---|---|---|
-| Core ACP client and mock Agent | Handshake, prompt, Updates, cancel, and permissions covered by unit tests | Mock Agent done; ACP client pending |
+| Core ACP client and mock Agent | Handshake, prompt, Updates, cancel, and permissions covered by unit tests | Done |
 | Stable direct Session | `@conductor` streams messages, thoughts, tool calls, diffs, permissions, usage, and Read-back | Pending |
 | Wizard, settings, and multiple Runtimes | Claude, Codex, Gemini, and Copilot can be validated and configured from live Config Options | Pending |
 | Orchestrator | Suppression, authenticated Shim tools, worktrees, limits, cancellation cascade, and Sessions tree pass integration tests | Pending |
@@ -45,11 +45,11 @@ Authority order used by the audit:
 | Toolchain preflight | Partial | `make doctor` accepts Node 20+, while the locked lint dependency requires `^20.19.0 || ^22.13.0 || >=24` | Align package engines and doctor checks with the lockfile-supported runtime range. |
 | Built-in runtime metadata | Partial | `src/core/runtimeRegistry.ts` contains four static entries | Add overrides, detection, secure executable resolution, custom runtimes, registry cache, and launch validation. |
 | Suppression value builders | Partial | `src/core/policy.ts` builds Claude, Codex, Gemini, and Copilot values | Attach them to launch/session flows, make capability explicit, verify every recipe, and add merge/revert handling for Gemini. |
-| Unit tests | Partial | `src/test/unit/policy.test.ts` tests only helper values and catalog basics | Add protocol, lifecycle, discovery, policy, IPC, orchestrator, and VS Code integration coverage. |
+| Unit tests | Partial | Protocol, lifecycle, mock-Agent, policy, and manifest coverage under `src/test/unit/` | Add discovery, registry, IPC, orchestrator, and VS Code integration coverage. |
 | Extension activation | Implemented | `src/extension.ts` registers an output channel and manifest commands | Replace bootstrap handlers with a composition root and deterministic teardown. |
 | Connect-a-CLI command | Stub | Runtime picker only; no detection, probe, auth, smoke test, or save | Implement the cancellable wizard and persist only validated configuration. |
 | Chat participant and slash commands | Stub | Participant always prints bootstrap text and ignores the request | Create sessions, dispatch commands, stream every supported Update, and cancel turns. |
-| ACP client and Session lifecycle | Absent | No source imports `@agentclientprotocol/sdk` | Implement initialize, new/load, prompt/update, config, cancellation, and subprocess teardown. |
+| ACP client and Session lifecycle | Implemented | `src/core/acpClient.ts`, `src/core/session.ts`; contract and lifecycle tests under `src/test/unit/` | Keep one process per Session; Config Option Read-back and persistence build on it. |
 | Config Option discovery and Read-back | Absent | Types mention effort but no protocol handling exists | Drive selectors from live `configOptions`, retain complete refreshes, and expose requested versus effective values. |
 | Permission, filesystem, terminal, and elicitation client services | Absent | No `src/vscode/**` implementation exists | Add validated ports and VS Code adapters without claiming they sandbox the Agent process. |
 | Sessions tree, transcript, and diff provider | Absent | Manifest contributes a view but no provider is registered | Render direct and child Session state and wire cancel/resume/diff commands. |
@@ -187,12 +187,12 @@ Canonical docs require resume and a second rendering sink but define neither the
 
 **Files:** Create `src/core/acpClient.ts`, `src/core/session.ts`; modify `src/core/types.ts`, `src/core/index.ts`.
 
-- [ ] Write failing client contract tests for initialize, absolute `cwd`, stable sorted `mcpServers`, capability-conditional `additionalDirectories`, prompt updates, permission forwarding, cancellation grace fallback, load/resume reinjection, malformed stdout, stderr capture, and child exit.
-- [ ] Define narrow ports for permission, fs, terminal, elicitation, logging, clocks, and process spawning. Do not import `vscode`.
-- [ ] Spawn only validated absolute commands with `shell: false`, inherited non-secret environment, catalog policy environment, and resolved SecretStorage values supplied by the UI adapter.
-- [ ] Implement initialize, `session/new`, `session/load`, prompt/update dispatch, Config Option notifications, cancel grace timer, SIGTERM fallback, child-exit failure, and idempotent dispose.
-- [ ] Ensure every Session owns exactly one process and cancellation cannot terminate another Session.
-- [ ] Run `node --import tsx --test src/test/unit/acp_client.test.ts`; expect all ACP lifecycle tests to pass. Run `make lint`; expect exit 0. Commit: `feat: add ACP session lifecycle`.
+- [x] Write failing client contract tests for initialize, absolute `cwd`, stable sorted `mcpServers`, capability-conditional `additionalDirectories`, prompt updates, permission forwarding, cancellation grace fallback, load/resume reinjection, malformed stdout, stderr capture, and child exit.
+- [x] Define narrow ports for permission, fs, terminal, elicitation, logging, clocks, and process spawning. Do not import `vscode`.
+- [x] Spawn only validated absolute commands with `shell: false`, inherited non-secret environment, catalog policy environment, and resolved SecretStorage values supplied by the UI adapter.
+- [x] Implement initialize, `session/new`, `session/load`, prompt/update dispatch, Config Option notifications, cancel grace timer, SIGTERM fallback, child-exit failure, and idempotent dispose.
+- [x] Ensure every Session owns exactly one process and cancellation cannot terminate another Session.
+- [x] Run `node --import tsx --test src/test/unit/acp_client.test.ts`; expect all ACP lifecycle tests to pass. Run `make lint`; expect exit 0. Commit: `feat: add ACP session lifecycle`.
 
 ### Task 4: Implement Config Option discovery and Read-back
 
@@ -261,6 +261,7 @@ interface EffectiveSelection {
 
 - [ ] Implement cancellable detect, configure, trust, auth handoff, Config Option discovery, policy, smoke test, and save stages with a single state object.
 - [ ] Probe in a temporary directory with writes/execute rejected; require the smoke response `OK`; show effective selections and mismatches.
+- [ ] Give every probe stage a short Setup Deadline instead of the Session default, so a silent Runtime fails the wizard step quickly rather than after the full session-setup wait.
 - [ ] Persist only after successful validation; preserve existing Runtime entries and let the user choose global or workspace scope.
 - [ ] Require explicit acknowledgement for cross-provider/subscription-backed fan-out; direct Sessions remain independently configurable.
 - [ ] Wire registry refresh to validated cache refresh and visible offline fallback.

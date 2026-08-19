@@ -55,7 +55,7 @@ Two process facts anchor everything: the **extension spawns each Agent**; the **
 
 ## Layering rules
 
-`src/core/**` may not import `vscode` (checked by `make lint`). `src/vscode/**` may import core. `src/shim/**` is standalone — bundled separately, no imports from either (it runs outside the extension host). TypeScript only — no other implementation languages (ADR-0003). The core's internal API mirrors ACP semantics: it runs under plain Node in unit tests, and could later back the ACP-agent Facade as a Node process reusing `src/core` — a packaging change, not a rewrite.
+`src/core/**` may not import `vscode` (checked by `make lint`). Everything the core needs from its host arrives through Client Ports — permission, filesystem, terminal, elicitation, logging, clock, and process spawning. `src/vscode/**` may import core and supplies those adapters. `src/shim/**` is standalone — bundled separately, no imports from either (it runs outside the extension host). TypeScript only — no other implementation languages (ADR-0003). The core's internal API mirrors ACP semantics: it runs under plain Node in unit tests, and could later back the ACP-agent Facade as a Node process reusing `src/core` — a packaging change, not a rewrite.
 
 ## Data flows
 
@@ -64,6 +64,8 @@ Two process facts anchor everything: the **extension spawns each Agent**; the **
 **Spawn.** Model calls `spawn_subagent{runtime?, model?, effort?, brief, …}` → Shim → socket → Orchestrator: validate the active Session Capability, Runtime Trust fingerprint, provider consent, depth, semaphore, local limits, and optional Budget Capability → resolve Preset defaults → optional `git worktree add` → child `session/new` on the target Runtime (Suppression on; **no Shim below Depth Cap** — the recursion guard) → child updates render nested under the parent tool call → child's final message returns as the tool result.
 
 **Permission.** Any Session → `session/request_permission` → policy (automatic allow/reject by Client Operation, remembered always-choices; `ToolKind` display-only) → else modal → `selected`/`cancelled`. Cancelled turns must answer `cancelled`. This is consent and audit, not an Agent sandbox.
+
+**Failure.** A Session owns one Agent process for its whole life. Every wait on a Runtime is bounded: a Setup Deadline bounds each setup request — the handshake, then Session creation — and a Stall Limit bounds silence inside a Turn — a stalled Turn is cancelled cooperatively first, then falls back to termination like any cancel. Time the Client owes the Agent an answer never counts as silence. A Turn fails when that process or the ACP connection dies, and the failure carries the exit status when it is known and the recent Agent stderr either way; an Agent that merely refuses one Turn keeps the Session usable. ACP transports skip unparseable lines instead of closing, so stream corruption surfaces as a stranded request rather than a transport error. A refused handshake reports both its reason and how the process ended: a Runtime that shuts down cooperatively exits exactly like one that died on its own, so the cause cannot be inferred after the fact. The Client advertises only the capabilities a Client Port can actually serve, and answers `cancelled` when no permission route exists.
 
 **Cancel.** `session/cancel` → revoke its Session Capability → await `stopReason:"cancelled"` under a grace timer → terminate only that Session's process as fallback. Parent cancel cascades to tracked children.
 

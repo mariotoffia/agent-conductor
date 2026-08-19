@@ -6,6 +6,7 @@ Code identifiers, settings keys, docs, and commit messages use these words with 
 |---|---|
 | **Agent** | The ACP-side counterparty: a coding CLI (or adapter) we spawn and drive over stdio. |
 | **Client** | The ACP role we implement: spawns the Agent, renders updates, answers permission/fs/terminal requests. Never runs the loop. |
+| **Client Port** | A narrow interface through which the `vscode`-free core reaches one host service: permission, filesystem, terminal, elicitation, logging, clock, process spawning. A port's presence is what allows the Client to advertise the matching ACP capability. |
 | **Harness** | A CLI's own agent loop — its system prompt, tools, memory files, compaction, permission engine. Always the CLI's, never ours. |
 | **Adapter** | An ACP wrapper around a non-ACP CLI (`claude-agent-acp`, `codex-acp`). |
 | **Runtime** | A configured, launchable agent: id + launch spec + suppression plan + quirks. Settings key `agentConductor.runtimes`. |
@@ -14,6 +15,9 @@ Code identifiers, settings keys, docs, and commit messages use these words with 
 | **Session** | One ACP session on one Runtime (`ConductorSession` wraps it). |
 | **Persisted Session** | Versioned, metadata-only Session record. Sensitive resume-token values live in SecretStorage, never in the record. |
 | **Turn** | One `session/prompt` → stop-reason cycle. |
+| **Setup Deadline** | How long a Runtime may take to answer *each* setup request — the handshake, then Session creation — before the Client abandons it and terminates its process. |
+| **Stall Limit** | How long a Turn may go without any Agent activity before the Client ends it. Time the Client owes the Agent an answer does not count. |
+| **Cancel Grace** | How long a cancelled Turn may keep running after `session/cancel` before the Client terminates that Session's Agent process. |
 | **Update** | One `session/update` notification variant (message/thought chunk, tool_call, plan, …). |
 | **Config Option** | ACP `configOptions` entry; categories `model`, `thought_level`, `mode`, `model_config`. The only sanctioned model/effort channel. |
 | **Effort** | Reasoning/thought level (`low…max`). Always advisory — see Read-back. |
