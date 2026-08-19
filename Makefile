@@ -1,15 +1,22 @@
 # Agent Conductor — build/test/package front door.
 # `make help` lists targets. Checkers write one log each under reports/.
 
-SHELL := /bin/bash
+# `.SHELLFLAGS` is only honoured by GNU make >= 3.82, and macOS ships 3.81, which
+# ignores it in silence. A checker's failure would then be hidden by the `tee` it
+# is piped into, and every gate would report success on a red branch — so pipefail
+# is carried by SHELL itself, which both versions apply to every recipe line.
+# `make gate-selftest` proves it still holds. Verified on 3.81 and 4.4.1.
+SHELL := /bin/bash -o pipefail
 .SHELLFLAGS := -o pipefail -ec
 NPM   ?= npm
 NODE  ?= node
 REPORTS := reports
+CORE_DIR ?= src/core
+CORE_LOG ?= $(REPORTS)/core-imports.log
 
 .DEFAULT_GOAL := help
-.PHONY: help install doctor build watch lint typecheck test test-integration check check-all \
-        package package-rich release registry-cache adr plan clean
+.PHONY: help install doctor build watch lint typecheck core-imports gate-selftest pipe-probe \
+        test test-integration check check-all package package-rich release registry-cache adr plan clean
 
 help: ## Show this help
 	@awk 'BEGIN {FS = ":.*##"} /^[a-zA-Z_-]+:.*?##/ { printf "  \033[36m%-18s\033[0m %s\n", $$1, $$2 }' $(MAKEFILE_LIST)
@@ -40,15 +47,51 @@ typecheck: ## tsc --noEmit → reports/tsc.log
 	@mkdir -p $(REPORTS)
 	npx tsc --noEmit 2>&1 | tee $(REPORTS)/tsc.log
 
-lint: typecheck ## All static checks → reports/<tool>.log (eslint, core-import seam)
+lint: typecheck gate-selftest ## All static checks → reports/<tool>.log (eslint, core-import seam)
 	@mkdir -p $(REPORTS)
 	npx eslint src --max-warnings 0 2>&1 | tee $(REPORTS)/eslint.log
-	@# Extraction seam (ADR-0003): src/core must not import vscode
-	@! grep -rnE "from ['\"]vscode['\"]|require\(['\"]vscode['\"]\)" src/core \
-	  | tee $(REPORTS)/core-imports.log | grep . \
-	  || { echo "core-imports: OK" > $(REPORTS)/core-imports.log; true; }
-	@test ! -s $(REPORTS)/core-imports.log -o "$$(cat $(REPORTS)/core-imports.log)" = "core-imports: OK" \
-	  || { echo "FAIL: vscode import inside src/core (see $(REPORTS)/core-imports.log)"; exit 1; }
+	@$(MAKE) --no-print-directory core-imports
+
+# Extraction seam (ADR-0003). The pattern is any quoted `vscode`, not an import
+# form: static import, dynamic `import()`, `require`, a backtick specifier and
+# `createRequire` all reach the host module, and enumerating spellings is how a
+# seam check ends up narrower than the rule it enforces. A legitimate quoted
+# "vscode" in core does not exist — rephrase or move the code.
+# grep says 0 when it finds a violation, 1 when the seam holds, and 2 when it
+# could not look; a checker that could not look has not passed, so only 1 writes
+# an OK. CORE_DIR/CORE_LOG let the self-test run this very recipe on a probe.
+core-imports: ## Check the vscode-free seam over $(CORE_DIR)
+	@mkdir -p $(REPORTS)
+	@grep -rnE "['\"\`]vscode['\"\`]" $(CORE_DIR) > $(CORE_LOG); \
+	  case $$? in \
+	    0) echo "FAIL: vscode import inside $(CORE_DIR) (see $(CORE_LOG))"; exit 1 ;; \
+	    1) echo "core-imports: OK" > $(CORE_LOG) ;; \
+	    *) echo "FAIL: core-import check could not read $(CORE_DIR)"; exit 1 ;; \
+	  esac
+
+# A gate that cannot fail is worse than a red build: it reports success forever.
+# Both halves of this have been real defects, so each gate run re-proves them.
+gate-selftest: ## Prove the gates still fail when they should
+	@tmp=$$(mktemp -d); rc=0; \
+	  set -- 'import * as vscode from "vscode";' \
+	         'const later = await import("vscode");' \
+	         'const host = require(`vscode`);' \
+	         'const host = createRequire(import.meta.url)("vscode");' \
+	         '"vscode";'; \
+	  for probe in "$$@"; do \
+	    rm -rf $$tmp/core; mkdir -p $$tmp/core; \
+	    printf '%s\n' "$$probe" > $$tmp/core/probe.ts; \
+	    $(MAKE) --no-print-directory core-imports CORE_DIR=$$tmp/core CORE_LOG=$$tmp/log >/dev/null 2>&1 \
+	      && { echo "FAIL: the seam check misses: $$probe"; rc=1; }; \
+	  done; \
+	  rm -rf $$tmp; test $$rc -eq 0
+	@$(MAKE) --no-print-directory pipe-probe >/dev/null 2>&1 \
+	  && { echo "FAIL: a failing command in a piped recipe reports success — check SHELL pipefail"; exit 1; } \
+	  || echo "gate self-test: OK"
+
+# Must fail. Invoked only by gate-selftest, which asserts that it does.
+pipe-probe:
+	@false | tee /dev/null
 
 test: ## Unit tests incl. mock-ACP-agent protocol tests → reports/test.log
 	@mkdir -p $(REPORTS)
@@ -65,8 +108,10 @@ package: build ## Marketplace VSIX (stable APIs only)
 	npx @vscode/vsce package --out dist/agent-conductor.vsix
 
 package-rich: build ## Sideload VSIX with proposed APIs (chatSessions build)
-	$(NODE) scripts/gen-rich-manifest.mjs && npx @vscode/vsce package --out dist/agent-conductor-rich.vsix; \
-	$(NODE) scripts/gen-rich-manifest.mjs --restore
+	@$(NODE) scripts/gen-rich-manifest.mjs
+	@npx @vscode/vsce package --out dist/agent-conductor-rich.vsix; status=$$?; \
+	  $(NODE) scripts/gen-rich-manifest.mjs --restore; \
+	  exit $$status
 
 release: ## Full gate + both VSIX artifacts; tagging/publishing stay human actions
 	@git diff --quiet && git diff --cached --quiet || { echo "working tree dirty — commit first"; exit 1; }

@@ -59,6 +59,8 @@ make lint   # every static check; one log per checker under reports/
 make test   # unit tests (mock ACP agent, no live CLIs)
 ```
 
+`make lint` starts by proving the gates can still fail — a planted `vscode` import must be caught, and a failing command inside a piped recipe must not be hidden by the `tee` it writes its log through. A gate that cannot fail reports success forever, so treat a `gate self-test` failure as a broken build, not a broken test.
+
 Both green on your branch. Failures that pre-date your work are still your problem on the branch — fix or revert before declaring done.
 
 Convenience wrappers (same gates, different scopes):
