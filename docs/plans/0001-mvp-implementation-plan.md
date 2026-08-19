@@ -214,13 +214,13 @@ interface EffectiveSelection {
 
 ### Task 5: Make Runtime resolution secure and offline-safe
 
-**Files:** Modify `src/core/runtimeRegistry.ts`, `src/core/types.ts`; create `src/core/registryCache.ts`, `src/test/unit/runtime_registry.test.ts`.
+**Files:** Modify `src/core/runtimeRegistry.ts`, `src/core/types.ts`; create `src/core/registryCache.ts`, `src/test/unit/runtime_registry.test.ts` (split into `runtime_trust.test.ts` and `registry_cache.test.ts` with shared `src/test/runtime-fixtures.ts` to stay under the 500-line rule).
 
-- [ ] Test built-in overrides, disabled/custom Runtimes, trust state, suppression/budget/read-back capabilities, exact version pins, invalid schemas, stale cache, offline fallback, and executable validation.
-- [ ] Resolve command paths in the wizard/registry layer and reject relative or missing commands before Session spawn.
-- [ ] Allow exact-version adapter installation only as an explicit wizard action; Session startup must never invoke an installer or network-fetching `npx` path.
-- [ ] Validate registry JSON with Zod and atomically cache it under VS Code global storage through a core storage port.
-- [ ] Run `node --import tsx --test src/test/unit/runtime_registry.test.ts`; expect pass. Commit: `feat: resolve trusted runtime launches`.
+- [x] Test built-in overrides, disabled/custom Runtimes, trust state, suppression/budget/read-back capabilities, exact version pins, invalid schemas, stale cache, offline fallback, and executable validation.
+- [x] Resolve command paths in the wizard/registry layer and reject relative or missing commands before Session spawn.
+- [x] Allow exact-version adapter installation only as an explicit wizard action; Session startup must never invoke an installer or network-fetching `npx` path.
+- [x] Validate registry JSON with Zod and atomically cache it under VS Code global storage through a core storage port. Core port and contract only; the global-storage adapter lands with the VS Code layer in Task 7.
+- [x] Run `node --import tsx --test src/test/unit/runtime_registry.test.ts`; expect pass. Commit: `feat: resolve trusted runtime launches`.
 
 ### Task 6: Complete and verify Suppression Plans
 

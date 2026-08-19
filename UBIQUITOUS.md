@@ -6,9 +6,9 @@ Code identifiers, settings keys, docs, and commit messages use these words with 
 |---|---|
 | **Agent** | The ACP-side counterparty: a coding CLI (or adapter) we spawn and drive over stdio. |
 | **Client** | The ACP role we implement: spawns the Agent, renders updates, answers permission/fs/terminal requests. Never runs the loop. |
-| **Client Port** | A narrow interface through which the `vscode`-free core reaches one host service: permission, filesystem, terminal, elicitation, logging, clock, process spawning. A port's presence is what allows the Client to advertise the matching ACP capability. |
+| **Client Port** | A narrow interface through which the `vscode`-free core reaches one host service: permission, filesystem, terminal, elicitation, logging, clock, process spawning, executable lookup, durable storage. A port's presence is what allows the Client to advertise the matching ACP capability. |
 | **Harness** | A CLI's own agent loop — its system prompt, tools, memory files, compaction, permission engine. Always the CLI's, never ours. |
-| **Adapter** | An ACP wrapper around a non-ACP CLI (`claude-agent-acp`, `codex-acp`). |
+| **Adapter** | An ACP wrapper around a non-ACP CLI (`claude-agent-acp`, `codex-acp`). Installed at an exact version, then launched like any other executable — never fetched at Session start, because nothing fetched on demand can carry an identity the user approved in advance. |
 | **Runtime** | A configured, launchable agent: id + launch spec + suppression plan + quirks. Settings key `agentConductor.runtimes`. |
 | **Runtime Trust** | User approval bound to the canonical Agent/Adapter artifact and effective launch specification. Re-verified before every spawn; mismatches fail closed. |
 | **Conductor** | Our orchestration layer as a whole; also the future ACP-agent facade name. |
@@ -37,7 +37,7 @@ Code identifiers, settings keys, docs, and commit messages use these words with 
 | **Isolation** | Change-coordination mode: `shared` cwd or a dedicated git `worktree`. It is not an Agent security boundary. |
 | **Probe Session** | Throwaway session the wizard opens for auth check and Config Option discovery. |
 | **Smoke Test** | Wizard step: one-line prompt proving stream + Read-back end to end. |
-| **Registry** | The machine-readable ACP agent registry JSON (launch specs, pinned versions). |
+| **Registry** | The machine-readable ACP agent registry JSON. Everything it publishes is a way to *obtain* an agent over the network, never a way to launch one already installed, so the Client takes only the exact Adapter *version* from it. Validated, size-bounded, cached, pinnable, optional: the built-in catalog works offline. |
 | **Facade** | An upstream protocol surface of the Conductor (ACP-agent now-ish, AHP later). |
 | **Client Operation** | Authorization key derived by the Client from an ACP method and normalized arguments (`fs.read`, `terminal.spawn`, …). |
 | **ToolKind** | Agent-supplied ACP tool classification (`read`, `edit`, `execute`, …), used for display only. |

@@ -30,6 +30,20 @@ export interface SessionPolicy {
   suppressBuiltInSubagents: boolean;
 }
 
+/**
+ * The npm package that provides an Adapter's executable. The Registry tracks its
+ * version; installing it is an explicit wizard action, never something a Session
+ * start may trigger — nothing here is ever handed to a package runner (ADR-0007).
+ */
+export interface AdapterPackage {
+  /** Package name without a version. */
+  package: string;
+  /** Exact version — never a range, never a dist-tag. */
+  version: string;
+  /** Executable the package installs; looked up on PATH once installed. */
+  bin: string;
+}
+
 export interface RuntimeSpec {
   id: string;
   displayName: string;
@@ -37,11 +51,81 @@ export interface RuntimeSpec {
   /** Command the wizard opens in a terminal when the agent reports auth is required. */
   loginCommand?: string;
   detection: { binaries: string[]; versionArgs: string[] };
+  /** Effective per-session policy this entry was built with. Part of the launch
+   *  identity: suppression rides in argv, env, and `_meta`, so a Runtime that
+   *  suppresses nothing is not the Runtime the user approved (ADR-0008). */
+  policy: SessionPolicy;
+  /** Why this entry cannot launch, when something about it is already known to be
+   *  wrong. Listed so the user can see it and told when resolved, rather than
+   *  silently missing from the picker. */
+  unavailable?: string;
+  /** Id of this Runtime in the ACP Registry, when the Registry tracks it. */
+  registryId?: string;
+  /** Adapter package behind `launch.command`; absent for a native ACP CLI. */
+  adapter?: AdapterPackage;
+  /** User-defined Runtime: no built-in Suppression Plan, and no orchestration
+   *  until the user supplies and verifies one (ADR-0008). */
+  custom?: boolean;
   /** Fallback picker source when the agent exposes no configOptions. */
   modelCatalog?: ModelHint[];
   quirks: RuntimeQuirks;
   /** Builds the `_meta` object for `session/new` (per-session policy channel). */
   sessionMeta?: (policy: SessionPolicy) => Record<string, unknown> | undefined;
+}
+
+/**
+ * What the user approved for one Runtime, bound to one launch identity (ADR-0007).
+ * Catalog membership grants nothing; a Runtime whose fingerprint no longer matches
+ * is untrusted again, and the capabilities recorded against it lapse with it.
+ */
+export interface RuntimeTrust {
+  /** Fingerprint of the canonical artifact plus effective launch specification. */
+  fingerprint: string;
+  /** Suppression Plan verified against this exact fingerprint (ADR-0008). */
+  suppression?: boolean;
+  /** Agent-enforced monetary child limits verified for this fingerprint. */
+  budget?: boolean;
+}
+
+/** What a Runtime may take part in, once its trust fingerprint still matches. */
+export interface RuntimeCapabilities {
+  /** Catalog trait, not evidence: this Runtime is known to report effective values
+   *  at all. A given selection is still only *verified* when the Agent reports it
+   *  for that Session — this flag never stands in for a Read-back (ADR-0005). */
+  readback: boolean;
+  /** Shim injection is allowed: current trust plus verified suppression (ADR-0008). */
+  suppression: boolean;
+  /** Agent-side monetary limits are enforceable. Local limits apply regardless. */
+  budget: boolean;
+}
+
+/**
+ * A Runtime whose command has been resolved to a real executable and measured
+ * against the trust the user granted. Producing one spawns nothing: it is what the
+ * wizard shows for approval and what `trustedLaunch` gates before a spawn.
+ */
+export interface ResolvedRuntime {
+  id: string;
+  displayName: string;
+  /** Absolute, canonical command with the catalog policy environment. Shown to the
+   *  user while approving; pass it to a Session only through `trustedLaunch`. */
+  launch: LaunchSpec;
+  quirks: RuntimeQuirks;
+  /** Per-session policy this Runtime was approved under. Carried so nothing
+   *  downstream can spawn under a policy the fingerprint never covered. */
+  policy: SessionPolicy;
+  /** `session/new` `_meta`, already built from `policy` — a value rather than a
+   *  function, so no caller can apply a policy other than the approved one. */
+  sessionMeta?: Record<string, unknown>;
+  custom: boolean;
+  /** Identity the user approves once and the Client re-verifies before every spawn. */
+  fingerprint: string;
+  trusted: boolean;
+  /** The fingerprint covers the artifact's content, not merely its path. False
+   *  means an in-place replacement at the same path would go unnoticed, so a host
+   *  that wants ADR-0007's artifact binding must supply a digest. */
+  artifactVerified: boolean;
+  capabilities: RuntimeCapabilities;
 }
 
 // ---------------------------------------------------------------------------
@@ -93,6 +177,35 @@ export interface AgentProcess {
 
 export interface ProcessPort {
   spawn(request: SpawnRequest): AgentProcess;
+}
+
+export interface ResolvedExecutable {
+  /** Absolute path with symlinks resolved: the file that would actually run. */
+  path: string;
+  /** Digest of that file, when the host can compute one. Absent is not a failure —
+   *  it narrows Runtime Trust to the path, which still fails closed on a move. */
+  digest?: string;
+}
+
+/** Finds the executable a command name would run. Never executes it. */
+export interface ExecutablePort {
+  /**
+   * PATH lookup for a bare name, existence check for an absolute path; `undefined`
+   * when nothing executable is there.
+   *
+   * The result must be spawnable without a shell, because that is how every Agent
+   * is started. On Windows that rules out returning a `.cmd`/`.bat` wrapper — Node
+   * refuses those unless a shell is enabled, which is exactly what argv from
+   * settings must never reach.
+   */
+  resolve(command: string): Promise<ResolvedExecutable | undefined>;
+}
+
+/** Durable key/value storage — VS Code global storage in production. */
+export interface StoragePort {
+  read(key: string): Promise<string | undefined>;
+  /** Replaces the whole value atomically: a torn write must never be readable. */
+  writeAtomic(key: string, value: string): Promise<void>;
 }
 
 /** Answers `session/request_permission`. Consent and audit, not a sandbox (ADR-0007). */

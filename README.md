@@ -14,7 +14,7 @@ Open the folder in VS Code and press **F5** (Run Extension). In the dev host: ru
 
 ## Security defaults
 
-Agent executables are trusted code, not sandboxed plugins. Connecting a Runtime records approval for its resolved launch fingerprint; changed executables require renewed trust. Cross-runtime orchestration is off until explicitly enabled, and worktrees coordinate changes without restricting Agent filesystem access.
+Agent executables are trusted code, not sandboxed plugins. Connecting a Runtime records approval for its resolved launch fingerprint, and a changed launch — a different executable, arguments, or suppression policy — requires renewed trust. Starting a session never downloads anything: agents and adapters are launched from executables already installed on the machine, and installing one is a separate step that names an exact version. Cross-runtime orchestration is off until explicitly enabled, and worktrees coordinate changes without restricting Agent filesystem access.
 
 Claude launches disable claude.ai subscription authentication by default. Configure API-key or supported cloud-provider credentials through VS Code SecretStorage; settings contain references, never secret values. Permission policy classifies Client filesystem and terminal operations independently of Agent-supplied `ToolKind`.
 
