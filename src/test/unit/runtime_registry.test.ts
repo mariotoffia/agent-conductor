@@ -183,7 +183,7 @@ test("a custom Runtime joins the catalog with no built-in policy of its own", as
   const custom = catalog.find((runtime) => runtime.id === "my-acp");
 
   assert.equal(custom?.custom, true);
-  assert.equal(custom?.sessionMeta, undefined);
+  assert.equal(custom?.suppression, undefined);
   assert.equal(custom?.adapter, undefined);
 
   const resolved = await resolveRuntime(custom as RuntimeSpec, {
@@ -261,7 +261,7 @@ test("replacing a built-in's launch stops it passing as the built-in", async () 
 
   assert.equal(claude.custom, true, "a user-supplied executable is a user-defined Runtime");
   assert.notEqual(claude.displayName, "Claude Code");
-  assert.equal(claude.sessionMeta, undefined, "the built-in's policy recipe does not describe it");
+  assert.equal(claude.suppression, undefined, "the built-in's policy recipe does not describe it");
   assert.equal(claude.adapter, undefined);
 
   const resolved = await resolveRuntime(claude, {
@@ -271,13 +271,24 @@ test("replacing a built-in's launch stops it passing as the built-in", async () 
 });
 
 test("replacing a built-in's argv stops it claiming the suppression that argv carried", () => {
-  const [copilot] = runtimeCatalog({ policy, overrides: { copilot: { args: ["--acp", "--stdio"] } } })
+  const [copilot] = runtimeCatalog({ policy, overrides: { copilot: { args: ["--acp"] } } })
     .filter((runtime) => runtime.id === "copilot");
 
   // The catalog's --excluded-tools flags are gone; the spec must not still assert
   // that this Runtime suppresses anything.
   assert.equal(copilot.custom, true);
   assert.equal(copilot.policy.suppressBuiltInSubagents, false);
+  assert.equal(copilot.suppression, undefined);
+});
+
+test("an override that restates the catalog's launch is not a replacement", () => {
+  const [copilot] = runtimeCatalog({ policy, overrides: { copilot: { args: ["--acp", "--stdio"] } } })
+    .filter((runtime) => runtime.id === "copilot");
+
+  // Nothing about what runs has changed, so the Suppression Plan still describes
+  // it — and keeps appending its exclusions on top of the arguments given.
+  assert.deepEqual(copilot.launch.args, ["--acp", "--stdio", "--excluded-tools", "task,read_agent"]);
+  assert.equal(copilot.policy.suppressBuiltInSubagents, true);
 });
 
 test("a non-string command from settings refuses one Runtime rather than crashing", async () => {

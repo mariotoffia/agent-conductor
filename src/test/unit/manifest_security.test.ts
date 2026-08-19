@@ -10,6 +10,7 @@ interface JsonSchema {
   enum?: string[];
   properties?: Record<string, JsonSchema>;
   additionalProperties?: boolean | JsonSchema;
+  required?: string[];
 }
 
 interface ExtensionManifest {
@@ -68,4 +69,17 @@ test("automatic permission policy uses Client-derived operation keys", () => {
     items: { type: "string", enum: operationKeys },
     default: [],
   });
+});
+
+test("a runtime entry can carry the suppression plan the settings layer validates", () => {
+  const runtimeEntry = settings["agentConductor.runtimes"].additionalProperties;
+  assert.ok(runtimeEntry && typeof runtimeEntry === "object");
+
+  // Without this the one channel by which a user-defined Runtime becomes eligible
+  // for orchestration is a schema error in the settings editor.
+  const plan = runtimeEntry.properties?.suppression;
+  assert.ok(plan, "no way to supply a suppression plan");
+  assert.equal(plan.additionalProperties, false);
+  assert.deepEqual(plan.required, ["delegationTools"]);
+  assert.equal(plan.properties?.delegationTools?.type, "array");
 });

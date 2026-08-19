@@ -1,0 +1,39 @@
+{
+  "claude": {
+    "launch": {
+      "command": "claude-agent-acp",
+      "args": [],
+      "env": {}
+    },
+    "suppression": null
+  },
+  "codex": {
+    "launch": {
+      "command": "codex-acp",
+      "args": [],
+      "env": {}
+    },
+    "suppression": null
+  },
+  "gemini": {
+    "launch": {
+      "command": "gemini",
+      "args": [
+        "--acp"
+      ],
+      "env": {}
+    },
+    "suppression": null
+  },
+  "copilot": {
+    "launch": {
+      "command": "copilot",
+      "args": [
+        "--acp",
+        "--stdio"
+      ],
+      "env": {}
+    },
+    "suppression": null
+  }
+}

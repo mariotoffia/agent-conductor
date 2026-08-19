@@ -29,8 +29,8 @@ Code identifiers, settings keys, docs, and commit messages use these words with 
 | **Brief** | The self-contained task description handed to a Subagent — file *paths*, never contents or history. |
 | **Shim** | `dist/mcp-shim.cjs`: the bundled stdio MCP server a harness spawns; tunnels tool calls to the extension under a Session Capability. |
 | **Orchestrator** | Extension-side owner of the spawn tree: defaults, semaphore, budgets, worktrees, cancel cascade. |
-| **Suppression Plan** | Per-runtime recipe (flags/env/settings/`_meta`) that disables the CLI's built-in delegation. |
-| **Suppression Capability** | Current evidence that a Suppression Plan works for an exact Runtime Trust fingerprint; required before Shim injection. |
+| **Suppression Plan** | Per-runtime recipe that disables the CLI's built-in delegation, as one value: the launch arguments, environment, `session/new` `_meta`, and workspace settings it works through, plus the delegation tools whose disappearance proves it worked. A Runtime the catalog has no recipe for has no plan until the user supplies one. |
+| **Suppression Capability** | Current evidence that a Suppression Plan works for an exact Runtime Trust fingerprint; required before Shim injection. A plan that works through a workspace file is evidence for that workspace only. No plan means no capability, whatever evidence was recorded. |
 | **Budget Capability** | A Runtime's verified ability to enforce a monetary child limit. Local depth, concurrency, count, and timeout limits remain mandatory. |
 | **Session Capability** | Short-lived Shim authority bound server-side to one active parent Session, depth, roots, expiry, allowed methods, and current Runtime Trust. |
 | **Depth Cap** | `maxSpawnDepth`; below it the Shim is *not injected* — this is the recursion guard. |

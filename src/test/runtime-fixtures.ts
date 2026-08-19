@@ -72,3 +72,14 @@ export function storage(initial?: string): StoragePort & { readonly writes: stri
     },
   };
 }
+
+/** The evidence a Probe Session leaves behind when a plan worked: the Agent's
+ *  tools with every delegation tool gone, and consent for any workspace write.
+ *  Whether that clears a given plan is decided by `verifySuppression`, not here. */
+export function cleared(extra: { workspace?: string } = {}): {
+  tools: string[];
+  workspaceSettingsConsent: boolean;
+  workspace?: string;
+} {
+  return { tools: ["read_file", "shell"], workspaceSettingsConsent: true, ...extra };
+}

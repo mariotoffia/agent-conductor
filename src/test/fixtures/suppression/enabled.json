@@ -1,0 +1,100 @@
+{
+  "claude": {
+    "launch": {
+      "command": "claude-agent-acp",
+      "args": [],
+      "env": {}
+    },
+    "suppression": {
+      "args": [],
+      "env": {},
+      "sessionMeta": {
+        "claudeCode": {
+          "options": {
+            "disallowedTools": [
+              "Agent",
+              "SendMessage",
+              "ListAgents"
+            ],
+            "agents": {}
+          }
+        }
+      },
+      "delegationTools": [
+        "Agent",
+        "SendMessage",
+        "ListAgents"
+      ]
+    }
+  },
+  "codex": {
+    "launch": {
+      "command": "codex-acp",
+      "args": [],
+      "env": {
+        "CODEX_CONFIG": "{\"agents\":{\"enabled\":false},\"features\":{\"multi_agent_v2\":false,\"collab\":false}}"
+      }
+    },
+    "suppression": {
+      "args": [],
+      "env": {
+        "CODEX_CONFIG": "{\"agents\":{\"enabled\":false},\"features\":{\"multi_agent_v2\":false,\"collab\":false}}"
+      },
+      "delegationTools": [
+        "spawn_agent"
+      ]
+    }
+  },
+  "gemini": {
+    "launch": {
+      "command": "gemini",
+      "args": [
+        "--acp"
+      ],
+      "env": {}
+    },
+    "suppression": {
+      "args": [],
+      "env": {},
+      "workspaceSettings": {
+        "file": ".gemini/settings.json",
+        "merge": {
+          "experimental": {
+            "enableAgents": false
+          },
+          "tools": {
+            "exclude": [
+              "invoke_agent"
+            ]
+          }
+        }
+      },
+      "delegationTools": [
+        "invoke_agent"
+      ]
+    }
+  },
+  "copilot": {
+    "launch": {
+      "command": "copilot",
+      "args": [
+        "--acp",
+        "--stdio",
+        "--excluded-tools",
+        "task,read_agent"
+      ],
+      "env": {}
+    },
+    "suppression": {
+      "args": [
+        "--excluded-tools",
+        "task,read_agent"
+      ],
+      "env": {},
+      "delegationTools": [
+        "task",
+        "read_agent"
+      ]
+    }
+  }
+}

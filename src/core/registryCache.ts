@@ -1,5 +1,5 @@
 import { z } from "zod";
-import type { StoragePort } from "./types.js";
+import type { AdapterPackage, StoragePort } from "./types.js";
 
 /**
  * The ACP Registry: the machine-readable catalogue of ACP agents, their current
@@ -150,4 +150,27 @@ export function registryAdapterVersion(
   if (at <= 0 || distributed.slice(0, at) !== packageName) return undefined;
   const version = distributed.slice(at + 1);
   return isExactVersion(version) ? version : undefined;
+}
+
+/** An npm package name, optionally scoped. Checked because the name becomes an
+ *  argument to a package manager: anything else could be a flag redirecting the
+ *  install, or something a terminal would read as more than a name. */
+const PACKAGE_NAME = /^(?:@[a-z0-9~][a-z0-9-._~]*\/)?[a-z0-9~][a-z0-9-._~]*$/;
+
+/**
+ * Command the connection wizard runs — deliberately, with the user watching — to
+ * install an Adapter at one exact version. It is the only place the extension
+ * names a package manager, and no Session path calls it: starting a Session must
+ * never install or fetch anything (ADR-0007).
+ */
+export function adapterInstallCommand(adapter: AdapterPackage): { command: string; args: string[] } {
+  if (!PACKAGE_NAME.test(adapter.package)) {
+    throw new Error(`adapter package name is not one: "${adapter.package}"`);
+  }
+  if (!isExactVersion(adapter.version)) {
+    throw new Error(
+      `adapter ${adapter.package}: installation needs an exact version, got "${adapter.version}"`,
+    );
+  }
+  return { command: "npm", args: ["install", "--global", `${adapter.package}@${adapter.version}`] };
 }

@@ -95,6 +95,32 @@
               "enabled": { "type": "boolean", "default": true },
               "command": { "type": "string" },
               "args": { "type": "array", "items": { "type": "string" } },
+              "suppression": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["delegationTools"],
+                "markdownDescription": "Suppression plan for a runtime the catalog has no recipe for. Until one is supplied and verified, the runtime cannot host cross-CLI subagents.",
+                "properties": {
+                  "args": { "type": "array", "items": { "type": "string" } },
+                  "env": { "type": "object", "additionalProperties": { "type": "string" } },
+                  "sessionMeta": { "type": "object", "description": "Sent as session/new _meta." },
+                  "workspaceSettings": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["file", "merge"],
+                    "properties": {
+                      "file": { "type": "string", "description": "Workspace-relative settings file to merge into." },
+                      "merge": { "type": "object" }
+                    }
+                  },
+                  "delegationTools": {
+                    "type": "array",
+                    "items": { "type": "string" },
+                    "minItems": 1,
+                    "description": "Tools the plan disables; their absence from the agent's live tool list is what verifies it."
+                  }
+                }
+              },
               "secretEnvironment": {
                 "type": "object",
                 "additionalProperties": { "type": "string" },

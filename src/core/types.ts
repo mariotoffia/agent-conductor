@@ -1,4 +1,5 @@
 import type * as acp from "@agentclientprotocol/sdk";
+import type { SuppressionEvidence, SuppressionPlan } from "./policy.js";
 
 /** Reasoning-effort levels understood by the conductor. Agents may clamp —
  *  the effective value must always be read back (ADR-0005). */
@@ -64,13 +65,16 @@ export interface RuntimeSpec {
   /** Adapter package behind `launch.command`; absent for a native ACP CLI. */
   adapter?: AdapterPackage;
   /** User-defined Runtime: no built-in Suppression Plan, and no orchestration
-   *  until the user supplies and verifies one (ADR-0008). */
+   *  until the user supplies one and its effect is verified (ADR-0008). */
   custom?: boolean;
   /** Fallback picker source when the agent exposes no configOptions. */
   modelCatalog?: ModelHint[];
   quirks: RuntimeQuirks;
-  /** Builds the `_meta` object for `session/new` (per-session policy channel). */
-  sessionMeta?: (policy: SessionPolicy) => Record<string, unknown> | undefined;
+  /** The recipe that disables this Runtime's built-in delegation, when it has one
+   *  and its policy asks for it. Absence is not a detail: a Runtime with no plan
+   *  can never be eligible for Shim injection, because there is nothing whose
+   *  effect could be verified (ADR-0008). */
+  suppression?: SuppressionPlan;
 }
 
 /**
@@ -81,8 +85,20 @@ export interface RuntimeSpec {
 export interface RuntimeTrust {
   /** Fingerprint of the canonical artifact plus effective launch specification. */
   fingerprint: string;
-  /** Suppression Plan verified against this exact fingerprint (ADR-0008). */
-  suppression?: boolean;
+  /**
+   * What a Probe Session observed for this exact fingerprint (ADR-0008).
+   *
+   * Deliberately the evidence rather than a verdict: a stored "verified" flag
+   * would outlive the plan it was true of, and a settings file could simply
+   * assert it. Eligibility is re-derived from this on every resolution, so a
+   * plan that grows a delegation tool invalidates its own old evidence.
+   */
+  suppression?: SuppressionEvidence & {
+    /** Absolute workspace the evidence was gathered in. Required by plans that
+     *  suppress through a workspace file, written in one workspace and absent
+     *  from the next. */
+    workspace?: string;
+  };
   /** Agent-enforced monetary child limits verified for this fingerprint. */
   budget?: boolean;
 }
@@ -93,7 +109,8 @@ export interface RuntimeCapabilities {
    *  at all. A given selection is still only *verified* when the Agent reports it
    *  for that Session — this flag never stands in for a Read-back (ADR-0005). */
   readback: boolean;
-  /** Shim injection is allowed: current trust plus verified suppression (ADR-0008). */
+  /** Shim injection is allowed: current trust, a plan, and evidence that still
+   *  clears it in this workspace (ADR-0008). */
   suppression: boolean;
   /** Agent-side monetary limits are enforceable. Local limits apply regardless. */
   budget: boolean;

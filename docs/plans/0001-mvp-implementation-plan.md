@@ -226,11 +226,11 @@ interface EffectiveSelection {
 
 **Files:** Modify `src/core/policy.ts`, `src/core/runtimeRegistry.ts`; create `src/test/unit/suppression_policy.test.ts` and golden fixtures under `src/test/fixtures/suppression/`.
 
-- [ ] Test exact enabled/disabled argv, env, workspace merge, and Session `_meta` for all built-ins.
-- [ ] Add Gemini merge/revert with preserved unrelated JSON and crash-safe atomic writes; require recorded consent.
-- [ ] Probe Copilot's live tool list in the wizard and fail orchestration closed if delegation-tool suppression cannot be verified.
-- [ ] Mark custom Runtimes ineligible for Shim injection until the user supplies and verifies a Suppression Plan.
-- [ ] Run `node --import tsx --test src/test/unit/suppression_policy.test.ts`; expect pass. Commit: `feat: enforce runtime suppression capabilities`.
+- [x] Test exact enabled/disabled argv, env, workspace merge, and Session `_meta` for all built-ins.
+- [x] Add Gemini merge/revert with preserved unrelated JSON and crash-safe atomic writes; require recorded consent.
+- [x] Core-side verification lands here and fails closed (unreadable or empty tool list, plan naming nothing, no plan); the wizard-side probe that supplies the tool list lands with the wizard in Task 9.
+- [x] Mark custom Runtimes ineligible for Shim injection until the user supplies and verifies a Suppression Plan.
+- [x] Run `node --import tsx --test src/test/unit/suppression_policy.test.ts`; expect pass. Commit: `feat: enforce runtime suppression capabilities`.
 
 ### Task 7: Add typed VS Code configuration and client services
 

@@ -8,7 +8,7 @@ import {
   type ExecutablePort,
   type RuntimeSpec,
 } from "../../core/index.js";
-import { executables, installed, policy, spec } from "../runtime-fixtures.js";
+import { cleared, executables, installed, policy, spec } from "../runtime-fixtures.js";
 
 // Runtime Trust: what the user approved, what changes it, and what lapses with it.
 
@@ -75,14 +75,14 @@ test("suppression and budget need current trust plus evidence; read-back is a Ru
 
   const verified = await resolveRuntime(runtimeSpec, {
     executable,
-    trust: { fingerprint, suppression: true, budget: true },
+    trust: { fingerprint, suppression: cleared(), budget: true },
   });
   assert.deepEqual(verified.capabilities, { readback: true, suppression: true, budget: true });
 
   // Evidence recorded against another identity grants nothing.
   const lapsed = await resolveRuntime(runtimeSpec, {
     executable,
-    trust: { fingerprint: "sha256:stale", suppression: true, budget: true },
+    trust: { fingerprint: "sha256:stale", suppression: cleared(), budget: true },
   });
   assert.deepEqual(lapsed.capabilities, { readback: true, suppression: false, budget: false });
 
@@ -101,7 +101,7 @@ test("switching suppression off changes the launch identity of every built-in", 
     const approved = await resolveRuntime(spec, { executable: installed });
     const flipped = await resolveRuntime(
       unsuppressed.find((entry) => entry.id === spec.id) as RuntimeSpec,
-      { executable: installed, trust: { fingerprint: approved.fingerprint, suppression: true, budget: true } },
+      { executable: installed, trust: { fingerprint: approved.fingerprint, suppression: cleared(), budget: true } },
     );
 
     assert.equal(flipped.trusted, false, `${spec.id} kept its trust with suppression switched off`);
@@ -124,7 +124,7 @@ test("suppression is decided per Runtime, not once for the window", () => {
   assert.equal(codex?.policy.suppressBuiltInSubagents, false);
   assert.equal(codex?.launch.env.CODEX_CONFIG, undefined);
   assert.equal(claude?.policy.suppressBuiltInSubagents, true);
-  assert.ok(claude?.sessionMeta?.(claude.policy), "claude keeps its suppression _meta");
+  assert.ok(claude?.suppression?.sessionMeta, "claude keeps its suppression _meta");
 });
 
 test("a launch that re-enters a package runner through argv cannot inherit trust", async () => {
@@ -136,7 +136,7 @@ test("a launch that re-enters a package runner through argv cannot inherit trust
 
   const sneaky = await resolveRuntime(
     spec({ launch: { command: "node", args: ["/usr/lib/npm/bin/npx-cli.js", "-y", "@attacker/acp"], env: {} } }),
-    { executable, trust: { fingerprint: approved.fingerprint, suppression: true } },
+    { executable, trust: { fingerprint: approved.fingerprint, suppression: cleared() } },
   );
 
   assert.equal(sneaky.trusted, false);
@@ -197,7 +197,7 @@ test("asking for suppression cannot revive a plan the replaced launch carried aw
     overrides: {
       claude: { command: "/opt/mine/claude-agent-acp", suppressBuiltInSubagents: true },
       codex: { command: "/opt/mine/codex-acp", suppressBuiltInSubagents: true },
-      copilot: { args: ["--acp", "--stdio"], suppressBuiltInSubagents: true },
+      copilot: { args: ["--acp"], suppressBuiltInSubagents: true },
     },
   });
   const executable = executables({
