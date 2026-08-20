@@ -163,7 +163,7 @@
           "type": "array",
           "items": { "type": "string", "enum": ["fs.read", "fs.write", "terminal.spawn", "terminal.wait", "terminal.kill", "terminal.release"] },
           "default": ["fs.read"],
-          "description": "Client operations approved without prompting; ACP ToolKind is display-only."
+          "description": "Client operations approved without prompting; ACP ToolKind is display-only. Waiting for, killing and releasing a command are never prompted for \u2014 consent is given when the command starts \u2014 so naming them here has no effect, while naming them under auto-reject does."
         },
         "agentConductor.permissions.autoRejectClientOperations": {
           "type": "array",
@@ -171,6 +171,13 @@
           "default": []
         },
         "agentConductor.permissions.rememberAlwaysChoices": { "type": "boolean", "default": true },
+        "agentConductor.permissions.maxEnvironmentChars": {
+          "type": "number",
+          "default": 900,
+          "minimum": 0,
+          "maximum": 1100,
+          "markdownDescription": "How much of a command's environment the approval prompt will show. A command whose environment does not fit is refused rather than described in part, so that an agent cannot choose which variable you do not read. Raise it for agents that legitimately forward large service environments; it can never exceed what one prompt can display."
+        },
         "agentConductor.claude.hideSubscriptionAuth": {
           "type": "boolean",
           "default": true,

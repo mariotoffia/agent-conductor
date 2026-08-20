@@ -234,15 +234,15 @@ interface EffectiveSelection {
 
 ### Task 7: Add typed VS Code configuration and client services
 
-**Files:** Create `src/vscode/config.ts`, `permissions.ts`, `fsProvider.ts`, `terminals.ts`; create focused unit tests with VS Code ports under `src/test/unit/`.
+**Files:** Create `src/vscode/config.ts`, `permissions.ts`, `elicitation.ts`, `fsProvider.ts`, `terminals.ts`; create focused unit tests with VS Code ports under `src/test/unit/`.
 
-- [ ] Parse and validate all `agentConductor.*` settings; reject invalid conflicting auto-allow/auto-reject entries and secret literals.
-- [ ] Resolve `secretEnvironment` values from `ExtensionContext.secrets`; redact values from errors and logs.
-- [ ] Decide client-owned fs/terminal policy from method and normalized arguments, using Agent `ToolKind` only as display metadata.
-- [ ] Serve dirty buffers first; normalize real paths; reject paths outside the Session roots; use `WorkspaceEdit` for open files.
-- [ ] Spawn terminal commands with structured command/args and `shell: false`; implement bounded ring-buffer output, wait, kill, and release.
-- [ ] Add form elicitation with cancel behavior so supported Agents need not silently disable questions.
-- [ ] Run focused tests, then `make lint`; expect pass. Commit: `feat: add VS Code ACP client services`.
+- [x] Parse and validate all `agentConductor.*` settings; reject invalid conflicting auto-allow/auto-reject entries and secret literals.
+- [x] Resolve `secretEnvironment` values from `ExtensionContext.secrets`; redact values from errors and logs.
+- [x] Decide client-owned fs/terminal policy from method and normalized arguments, using Agent `ToolKind` only as display metadata.
+- [x] Serve dirty buffers first; normalize real paths; reject paths outside the Session roots; use `WorkspaceEdit` for open files.
+- [x] Spawn terminal commands with structured command/args and `shell: false`; implement bounded ring-buffer output, wait, kill, and release.
+- [x] Add form elicitation with cancel behavior so supported Agents need not silently disable questions.
+- [x] Run focused tests, then `make lint`; expect pass. Commit: `feat: add VS Code ACP client services`.
 
 ### Task 8: Deliver the direct Session vertical slice
 

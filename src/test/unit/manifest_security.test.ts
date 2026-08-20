@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { test } from "node:test";
+import { DEFAULT_ENV_CHARS, MAX_ENV_CHARS } from "../../vscode/terminals.js";
 
 interface JsonSchema {
   type?: string;
@@ -8,6 +9,8 @@ interface JsonSchema {
   description?: string;
   items?: JsonSchema;
   enum?: string[];
+  minimum?: number;
+  maximum?: number;
   properties?: Record<string, JsonSchema>;
   additionalProperties?: boolean | JsonSchema;
   required?: string[];
@@ -62,7 +65,7 @@ test("automatic permission policy uses Client-derived operation keys", () => {
     type: "array",
     items: { type: "string", enum: operationKeys },
     default: ["fs.read"],
-    description: "Client operations approved without prompting; ACP ToolKind is display-only.",
+    description: "Client operations approved without prompting; ACP ToolKind is display-only. Waiting for, killing and releasing a command are never prompted for \u2014 consent is given when the command starts \u2014 so naming them here has no effect, while naming them under auto-reject does.",
   });
   assert.deepEqual(settings["agentConductor.permissions.autoRejectClientOperations"], {
     type: "array",
@@ -82,4 +85,14 @@ test("a runtime entry can carry the suppression plan the settings layer validate
   assert.equal(plan.additionalProperties, false);
   assert.deepEqual(plan.required, ["delegationTools"]);
   assert.equal(plan.properties?.delegationTools?.type, "array");
+});
+
+test("the approval prompt's environment budget cannot be raised past what it shows", () => {
+  const budget = settings["agentConductor.permissions.maxEnvironmentChars"];
+
+  // A budget beyond the prompt's own capacity would let the overflow fall off
+  // the end of it — which is the hiding the shown-or-refused rule exists to stop.
+  assert.equal(budget.maximum, MAX_ENV_CHARS);
+  assert.equal(budget.default, DEFAULT_ENV_CHARS);
+  assert.equal(budget.minimum, 0);
 });
