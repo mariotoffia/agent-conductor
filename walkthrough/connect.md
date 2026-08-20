@@ -1,5 +1,7 @@
-# connect
+# Connect a CLI
 
-Connecting approves the resolved Agent or Adapter launch fingerprint. Review the command carefully; changed launch identities require renewed trust.
+The wizard finds the CLI, shows you the exact command it will run, and asks you to approve it.
 
-Claude requires API-key or supported cloud-provider authentication. Secret values are stored in VS Code SecretStorage, never workspace settings.
+That approval covers the exact program and the exact arguments. If either changes later, you are asked again — so read the command before you accept it.
+
+**Claude needs an API key.** Signing in with a claude.ai subscription is disabled by default. Your key is stored in VS Code's secret storage. Your settings hold only the name of the key, never the key itself.

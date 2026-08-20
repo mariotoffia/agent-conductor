@@ -1,43 +1,43 @@
-# UBIQUITOUS — authoritative glossary
+# UBIQUITOUS — the words we use
 
-Code identifiers, settings keys, docs, and commit messages use these words with exactly these meanings. If a term must change meaning, update this file first (ADR if the semantics shift).
+Code, settings keys, docs and commit messages use these words with exactly these meanings. To change what a word means, change it here first (and write an ADR if the meaning really shifts).
 
 | Term | Meaning |
 |---|---|
-| **Agent** | The ACP-side counterparty: a coding CLI (or adapter) we spawn and drive over stdio. |
-| **Client** | The ACP role we implement: spawns the Agent, renders updates, answers permission/fs/terminal requests. Never runs the loop. |
-| **Client Port** | A narrow interface through which the `vscode`-free core reaches one host service: permission, filesystem, terminal, elicitation, logging, clock, process spawning, executable lookup, durable storage. A port's presence is what allows the Client to advertise the matching ACP capability. |
+| **Agent** | The coding CLI on the other side — or an adapter wrapping one. We start it and drive it over stdio. |
+| **Client** | The role we play: start the Agent, show what it sends, answer its permission, filesystem and terminal requests. We never run the agent loop ourselves. |
+| **Client Port** | One narrow interface through which the `vscode`-free core reaches VS Code: permission, filesystem, terminal, elicitation, logging, clock, starting processes, finding executables, durable storage. We only advertise an ACP capability when the matching port exists. |
 | **Harness** | A CLI's own agent loop — its system prompt, tools, memory files, compaction, permission engine. Always the CLI's, never ours. |
-| **Adapter** | An ACP wrapper around a non-ACP CLI (`claude-agent-acp`, `codex-acp`). Installed at an exact version, then launched like any other executable — never fetched at Session start, because nothing fetched on demand can carry an identity the user approved in advance. |
-| **Runtime** | A configured, launchable agent: id + launch spec + suppression plan + quirks. Settings key `agentConductor.runtimes`. |
-| **Runtime Trust** | User approval bound to the canonical Agent/Adapter artifact and effective launch specification. Re-verified before every spawn; mismatches fail closed. |
-| **Conductor** | Our orchestration layer as a whole; also the future ACP-agent facade name. |
-| **Session** | One ACP session on one Runtime (`ConductorSession` wraps it). |
-| **Persisted Session** | Versioned, metadata-only Session record. Sensitive resume-token values live in SecretStorage, never in the record. |
-| **Turn** | One `session/prompt` → stop-reason cycle. |
-| **Setup Deadline** | How long a Runtime may take to answer *each* request the Client makes outside a Turn — the handshake, Session creation, and setting a Config Option — before the Client abandons it. Abandoning setup terminates the process; abandoning a later request leaves the Session usable. |
-| **Stall Limit** | How long a Turn may go without any Agent activity before the Client ends it. Time the Client owes the Agent an answer does not count. |
-| **Cancel Grace** | How long a cancelled Turn may keep running after `session/cancel` before the Client terminates that Session's Agent process. |
-| **Update** | One `session/update` notification variant (message/thought chunk, tool_call, plan, …). |
-| **Config Option** | ACP `configOptions` entry; categories `model`, `thought_level`, `mode`, `model_config`. The only sanctioned model/effort channel. Categories are UX hints, so an option is taken for a picker only when its category matches *and* it is a `select`; everything else is preserved and rendered as-is. The Client does not advertise the boolean Config Option capability and never sets a boolean option. |
-| **Effort** | Reasoning/thought level (`low…max`). Always advisory — see Read-back. |
-| **Read-back** | Surfacing the *effective* model/effort reported by the agent after clamping, next to what was requested. Mandatory. An effective value exists only on the agent's own evidence; without it the selection is *unavailable*, never assumed to be what was requested. |
-| **Requested vs Effective** | The two halves of a Read-back. *Requested* is what the user asked for, however asked — a Preset, a Config Option set, or argv on a process-scoped Runtime. *Effective* is what the agent reports running. A verified selection whose two halves differ is a **mismatch**; an unverified one is unknown, never a mismatch. |
-| **Preset** | Named (runtime, model, effort) tuple in settings; default source for spawns. |
-| **Persona** | A role with scope + guardrails (`PERSONAS.md`); maps onto a Preset when spawned as a subagent. |
-| **Subagent** | A child Session created by the Orchestrator on any Runtime. Shares no conversation context with its parent. |
-| **Brief** | The self-contained task description handed to a Subagent — file *paths*, never contents or history. |
-| **Shim** | `dist/mcp-shim.cjs`: the bundled stdio MCP server a harness spawns; tunnels tool calls to the extension under a Session Capability. |
-| **Orchestrator** | Extension-side owner of the spawn tree: defaults, semaphore, budgets, worktrees, cancel cascade. |
-| **Suppression Plan** | Per-runtime recipe that disables the CLI's built-in delegation, as one value: the launch arguments, environment, `session/new` `_meta`, and workspace settings it works through, plus the delegation tools whose disappearance proves it worked. A Runtime the catalog has no recipe for has no plan until the user supplies one. |
-| **Suppression Capability** | Current evidence that a Suppression Plan works for an exact Runtime Trust fingerprint; required before Shim injection. A plan that works through a workspace file is evidence for that workspace only. No plan means no capability, whatever evidence was recorded. |
-| **Budget Capability** | A Runtime's verified ability to enforce a monetary child limit. Local depth, concurrency, count, and timeout limits remain mandatory. |
-| **Session Capability** | Short-lived Shim authority bound server-side to one active parent Session, depth, roots, expiry, allowed methods, and current Runtime Trust. |
-| **Depth Cap** | `maxSpawnDepth`; below it the Shim is *not injected* — this is the recursion guard. |
-| **Isolation** | Change-coordination mode: `shared` cwd or a dedicated git `worktree`. It is not an Agent security boundary. |
-| **Probe Session** | Throwaway session the wizard opens for auth check and Config Option discovery. |
-| **Smoke Test** | Wizard step: one-line prompt proving stream + Read-back end to end. |
-| **Registry** | The machine-readable ACP agent registry JSON. Everything it publishes is a way to *obtain* an agent over the network, never a way to launch one already installed, so the Client takes only the exact Adapter *version* from it. Validated, size-bounded, cached, pinnable, optional: the built-in catalog works offline. |
-| **Facade** | An upstream protocol surface of the Conductor (ACP-agent now-ish, AHP later). |
-| **Client Operation** | Authorization key derived by the Client from an ACP method and normalized arguments (`fs.read`, `terminal.spawn`, …). |
-| **ToolKind** | Agent-supplied ACP tool classification (`read`, `edit`, `execute`, …), used for display only. |
+| **Adapter** | A wrapper that gives a non-ACP CLI an ACP interface (`claude-agent-acp`, `codex-acp`). Installed once at an exact version, then launched like any other program. Never fetched when a session starts: anything fetched on demand cannot carry an identity the user approved beforehand. |
+| **Runtime** | A configured, launchable agent: an id, how to launch it, its suppression plan, its quirks. Settings key `agentConductor.runtimes`. |
+| **Runtime Trust** | The user's approval of one Runtime, tied to the exact program and the exact launch specification. Checked again before every start; a mismatch stops the launch. |
+| **Conductor** | Our orchestration layer as a whole. Also the name of the future ACP-agent facade. |
+| **Session** | One ACP session on one Runtime. `ConductorSession` wraps it. |
+| **Persisted Session** | A saved record of a Session — metadata only. Resume tokens live in SecretStorage, never in the record. |
+| **Turn** | One `session/prompt` and the stop reason that ends it. |
+| **Setup Deadline** | How long a Runtime may take to answer *each* request made outside a Turn: the handshake, creating the Session, setting a Config Option. Giving up during setup terminates the process; giving up on a later request leaves the Session usable. |
+| **Stall Limit** | How long a Turn may go with no activity from the Agent before we end it. Time we owe the Agent an answer does not count. |
+| **Cancel Grace** | How long a cancelled Turn may keep running before we terminate that Session's process. |
+| **Update** | One `session/update` notification: a message chunk, a thought chunk, a tool call, a plan, and so on. |
+| **Config Option** | An entry in the agent's `configOptions`. Categories: `model`, `thought_level`, `mode`, `model_config`. This is the only sanctioned way to set model and effort. Categories are hints, so we only drive a picker from an option whose category matches *and* which is a `select`; everything else is kept and shown as-is. We do not advertise the boolean Config Option capability, and never set a boolean option. |
+| **Effort** | Reasoning level, `low` to `max`. Always advisory — see Read-back. |
+| **Read-back** | Showing what the agent reports it is *actually* running, next to what was asked for. Required. A value is effective only when the agent itself reports it; without that the selection is *unavailable*, never assumed. |
+| **Requested vs Effective** | The two halves of a Read-back. *Requested* is what the user asked for, however they asked. *Effective* is what the agent says it is running. If both are known and they differ, that is a **mismatch**. If the effective value is unknown, that is unknown — not a mismatch. |
+| **Preset** | A named (runtime, model, effort) tuple in settings. The default source for a spawn. |
+| **Persona** | A role with a scope and guardrails (`PERSONAS.md`). Maps onto a Preset when spawned as a Subagent. |
+| **Subagent** | A child Session the Orchestrator creates on any Runtime. It shares no conversation with its parent. |
+| **Brief** | The self-contained task description handed to a Subagent. File *paths* — never file contents, never history. |
+| **Shim** | `dist/mcp-shim.cjs`: the small MCP server a harness starts for us. It passes tool calls back to the extension under a Session Capability. |
+| **Orchestrator** | The extension-side owner of the spawn tree: defaults, concurrency, budgets, worktrees, cancelling children. |
+| **Suppression Plan** | The per-runtime recipe that switches off a CLI's own way of handing work to subagents, held as one value: the launch arguments, environment, `session/new` `_meta` and workspace settings it works through, plus the tools whose disappearance proves it worked. A Runtime the catalog has no recipe for has no plan until the user writes one. |
+| **Suppression Capability** | Current evidence that a Suppression Plan works, for one exact Runtime Trust fingerprint. Required before we inject the Shim. A plan that works through a workspace file is evidence for that workspace only. No plan means no capability, whatever evidence was recorded. |
+| **Budget Capability** | Whether a Runtime can enforce a money limit on a child. Our own limits — depth, concurrency, count, timeout — apply regardless. |
+| **Session Capability** | Short-lived authority for the Shim, bound on our side to one active parent Session, a depth, a set of roots, an expiry, a list of allowed methods, and current Runtime Trust. |
+| **Depth Cap** | `maxSpawnDepth`. Below it we do not inject the Shim at all. That is what stops the recursion. |
+| **Isolation** | How changes are kept apart: a `shared` working directory, or a dedicated git `worktree`. It is not a security boundary. |
+| **Probe Session** | A throwaway session the wizard opens to check authentication and discover Config Options. |
+| **Smoke Test** | A wizard step: one short prompt that proves streaming and Read-back work end to end. |
+| **Registry** | The machine-readable list of ACP agents. Everything it publishes is a way to *download* an agent, never a way to launch one already installed — so we take only the exact adapter *version* from it. Validated, size-limited, cached, pinnable, optional: the built-in catalog works offline. |
+| **Facade** | An interface that exposes the Conductor to other editors (ACP-agent soon, AHP later). |
+| **Client Operation** | The key we authorize by, worked out from an ACP method and its arguments: `fs.read`, `terminal.spawn`, and so on. |
+| **ToolKind** | The agent's own label for a tool (`read`, `edit`, `execute`, …). Shown to the user, never used to decide anything. |

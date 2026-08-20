@@ -1,19 +1,29 @@
-# ADR-0003: TypeScript only; conductor core isolated behind a vscode-free seam
+# ADR-0003: TypeScript only, with the core kept free of `vscode`
 
 - Status: accepted
 - Date: 2026-08-18
 
 ## Context
 
-The extension host mandates TS/JS and the official ACP SDK is TypeScript. A polyglot split (a separate daemon in another language) was considered and rejected: it adds IPC, per-platform binary distribution, a second toolchain, and duplicated protocol code — for no user benefit. Simplicity is a stated project value.
+The VS Code extension host runs TypeScript or JavaScript, and the official ACP SDK is TypeScript.
+
+We considered splitting the work across two languages — a separate daemon written in something else. We rejected it. That split adds inter-process communication, a binary to build and ship per platform, a second toolchain, and a second copy of the protocol code. The user gets nothing from any of it. Simplicity is a stated goal of this project.
 
 ## Decision
 
-The project is **TypeScript only** — extension, conductor core, and MCP shim. `src/core/**` must not import `vscode` and exposes an ACP-shaped internal API. The seam exists for testability (core runs under plain Node in unit tests) and keeps one future option open without committing to it: lifting the core into a standalone Node process behind the ACP-agent facade.
+The project is **TypeScript only**: the extension, the conductor core, and the MCP shim.
+
+`src/core/**` must not import `vscode`. It offers an internal API shaped like ACP.
+
+That line exists for two reasons. It lets the core run under plain Node in unit tests. And it keeps one option open without committing to it: lifting the core into its own Node process behind an ACP-agent facade.
 
 ## Consequences
 
-One language, one toolchain; `make check` covers everything. The seam is machine-checked (`reports/core-imports.log`). Multi-editor reach, if ever wanted, is a packaging change (Node daemon reusing `src/core`), not a rewrite.
+One language and one toolchain, so `make check` covers everything.
+
+The line is checked by a machine, not by reviewers — see `reports/core-imports.log`.
+
+Supporting other editors, if we ever want to, becomes a packaging change: a Node daemon reusing `src/core`. Not a rewrite.
 
 ## References
 

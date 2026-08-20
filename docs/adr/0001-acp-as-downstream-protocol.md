@@ -1,19 +1,32 @@
-# ADR-0001: ACP is the downstream agent protocol
+# ADR-0001: ACP is the protocol we use to drive agents
 
 - Status: accepted
 - Date: 2026-08-18
 
 ## Context
 
-Candidate integration paths for driving coding CLIs from VS Code: per-CLI headless stream formats (`claude --output-format stream-json`, `codex exec --json`, …), VS Code's Language Model / Chat APIs, Microsoft's Agent Host Protocol (AHP), or the Agent Client Protocol (ACP). Per-CLI formats mean N bespoke parsers. The LM provider API hands the loop to Copilot — wrong shape for CLIs that *are* harnesses. AHP has no third-party harness registration and VS Code only connects to its own `code agent host` (SSH/dev-tunnel, auto-installed CLI); the protocol is explicitly unstable. ACP v1 is stable, jointly governed (Zed + JetBrains), has an official TS SDK, a machine-readable agent registry, and adapters/native support across every target CLI. Microsoft's own AHP doctrine treats ACP as the downstream layer.
+There were four ways to drive a coding CLI from VS Code.
+
+- **Each CLI's own output format** (`claude --output-format stream-json`, `codex exec --json`, and so on). That means writing and maintaining a separate parser for every CLI.
+- **VS Code's Language Model and Chat APIs.** These hand the agent loop to Copilot. That is the wrong shape: these CLIs *are* agent loops.
+- **Microsoft's Agent Host Protocol (AHP).** A third party cannot register a harness with it. VS Code only connects to its own `code agent host`, over SSH or a dev tunnel, with the CLI installed for you. The protocol describes itself as unstable.
+- **The Agent Client Protocol (ACP).** Version 1 is stable and governed jointly by Zed and JetBrains. It has an official TypeScript SDK, a machine-readable registry of agents, and either an adapter or native support for every CLI we target. Microsoft's own AHP documentation treats ACP as the layer beneath it.
 
 ## Decision
 
-All agent communication is ACP v1 over stdio. Non-ACP CLIs enter only through their ACP adapters. AHP surfaces (client or server) are deferred; nothing in the codebase may depend on AHP shapes. ACP v2 adoption requires a superseding ADR.
+We talk to agents over ACP v1, on stdio, and nothing else. A CLI that does not speak ACP is used through its ACP adapter.
+
+AHP is deferred, both as something we call and as something we offer. No code may depend on an AHP shape.
+
+Moving to ACP v2 requires a new ADR that supersedes this one.
 
 ## Consequences
 
-One protocol core covers every runtime, current and future (registry-resolved). We inherit ACP limits: no shared context across harnesses (delegation is Brief-level), stdio-only transport, config options as the only model/effort channel (ADR-0005). Revisit AHP when VS Code allows attach-by-address or harness registration.
+One protocol core covers every runtime we support today, and every one the registry adds later.
+
+We also take on ACP's limits. Two harnesses share no conversation, so handing work between them means writing a Brief. The transport is stdio only. Config options are the only way to set model and effort (ADR-0005).
+
+Look at AHP again if VS Code ever allows connecting by address, or lets a third party register a harness.
 
 ## References
 

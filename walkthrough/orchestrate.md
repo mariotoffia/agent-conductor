@@ -1,5 +1,7 @@
-# orchestrate
+# Let agents call other agents
 
-Cross-runtime orchestration is off by default. Enabling it requires verified built-in-delegation suppression plus target Runtime/provider consent.
+This is off until you turn it on.
 
-Worktrees coordinate branches and working files; they are not security sandboxes. Agents retain their operating-system access.
+Once on, the agent you are talking to can hand a self-contained task to an agent on another CLI. Before that is allowed, we check that the CLI's own subagent feature is switched off, and that you have approved the target CLI and its provider.
+
+**Git worktrees keep changes apart, not agents.** They stop two agents editing the same files. They do not limit what an agent can read or run — an agent has the same access to your machine that you do.

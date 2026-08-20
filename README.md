@@ -1,38 +1,52 @@
 # Agent Conductor
 
-Drive agentic coding CLIs — Claude Code, Codex, Gemini CLI, Copilot CLI, any [ACP](https://agentclientprotocol.com) agent — inside VS Code. Pick cli × model × effort per session; let the main agent spawn cross-CLI subagents under your policy, budget, and permissions. TypeScript only.
+Run coding CLIs — Claude Code, Codex, Gemini CLI, Copilot CLI, or any [ACP](https://agentclientprotocol.com) agent — inside VS Code.
 
-## Bootstrap
+You choose the CLI, the model, and the reasoning effort for each session. The agent you are talking to can hand work to agents on other CLIs, within limits you set. Written entirely in TypeScript.
+
+## Getting started
 
 ```bash
 git clone https://github.com/mariotoffia/agent-conductor && cd agent-conductor
-make install    # verifies node>=20/npm/git, reports installed agent CLIs, npm ci
-make check      # build + lint + unit tests (no live CLIs needed)
+make install    # checks for node>=20, npm and git, lists the agent CLIs you have, installs dependencies
+make check      # build, lint and unit tests — no agent CLI needed
 ```
 
-Open the folder in VS Code and press **F5** (Run Extension). In the dev host: run *Agent Conductor: Connect a CLI…* or mention **@conductor** in Chat.
+Open the folder in VS Code and press **F5** to launch the extension. In the new window, run *Agent Conductor: Connect a CLI…*, or type **@conductor** in Chat.
 
 ## Security defaults
 
-Agent executables are trusted code, not sandboxed plugins. Connecting a Runtime records approval for its resolved launch fingerprint, and a changed launch — a different executable, arguments, or suppression policy — requires renewed trust. Starting a session never downloads anything: agents and adapters are launched from executables already installed on the machine, and installing one is a separate step that names an exact version. Cross-runtime orchestration is off until explicitly enabled, and worktrees coordinate changes without restricting Agent filesystem access.
+An agent CLI is a program that runs with your permissions. It is not a sandboxed plugin. So:
 
-Claude launches disable claude.ai subscription authentication by default. Configure API-key or supported cloud-provider credentials through VS Code SecretStorage; settings contain references, never secret values. Permission policy classifies Client filesystem and terminal operations independently of Agent-supplied `ToolKind`.
+- **You approve each CLI before it runs.** The approval covers the exact program and the exact arguments. Change either and you are asked again.
+- **Starting a session never downloads anything.** Only programs already on your machine are run. Installing one is a separate step, and it names an exact version.
+- **Handing work to other CLIs is off** until you turn it on.
+- **Git worktrees keep changes apart, not agents.** They stop two agents editing the same files. They do not limit what an agent can read or run.
+- **Claude sessions need an API key.** Signing in with a claude.ai subscription is disabled by default. Keys live in VS Code's secret storage; your settings hold only the name of the key, never its value.
+- **Permission prompts say what the extension is about to do** — read this file, run this command — rather than repeating the agent's own description of it.
 
-Everyday targets (`make help` for all):
+## Everyday commands
 
-| Target | Does |
+`make help` lists them all.
+
+| Command | What it does |
 |---|---|
-| `make install` | prerequisite doctor + dependency install |
-| `make build` / `make watch` | esbuild → `dist/extension.cjs` + `dist/mcp-shim.cjs` |
-| `make lint` / `make test` | the done-criteria (AGENTS.md); logs under `reports/` |
-| `make check` / `make check-all` | aggregate gates (`check-all` adds extension-host tests) |
-| `make package` / `make package-rich` | Marketplace VSIX / sideload VSIX with proposed APIs |
-| `make release` | clean-tree gate + `check-all` + both VSIX artifacts |
-| `make adr NAME=…` / `make plan NAME=…` | scaffold a decision record / plan |
+| `make install` | checks prerequisites, then installs dependencies |
+| `make build` / `make watch` | builds `dist/extension.cjs` and `dist/mcp-shim.cjs` |
+| `make lint` / `make test` | the two checks that say your work is done; full logs land in `reports/` |
+| `make check` / `make check-all` | both of the above, plus a build (`check-all` also runs the VS Code tests) |
+| `make package` / `make package-rich` | builds the Marketplace extension file / one for sideloading |
+| `make release` | the full check plus both extension files |
+| `make adr NAME=…` / `make plan NAME=…` | starts a new decision record / plan |
 
 ## Documentation
 
-`AGENTS.md` (agent rules — start here) · `ARCHITECTURE.md` · `UBIQUITOUS.md` (glossary) · `PERSONAS.md` · `docs/adr/` (decisions) · `docs/plans/` (temporary working plans).
+- `AGENTS.md` — how to work in this repo. Start here.
+- `ARCHITECTURE.md` — how the pieces fit together.
+- `UBIQUITOUS.md` — what each term means.
+- `PERSONAS.md` — who owns which part.
+- `docs/adr/` — why each decision was made.
+- `docs/plans/` — working plans, deleted once done.
 
 ## License
 

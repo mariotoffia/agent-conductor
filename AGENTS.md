@@ -1,83 +1,89 @@
-# Agent Conductor Agent Rules
+# Agent Conductor — rules for working in this repo
 
-Canonical file. `.claude/CLAUDE.md` is a symlink to this. If the two ever disagree, preserve user edits and report it.
+This is the canonical file. `.claude/CLAUDE.md` is a symlink to it. If the two ever differ, keep the user's edits and say so.
 
-Agent Conductor is a **TypeScript VS Code extension** that drives agentic coding CLIs (Claude Code, Codex, Gemini CLI, Copilot CLI — any ACP agent) over the **Agent Client Protocol (ACP v1)**. The user picks cli × model × effort per session; a conductor layer spawns cross-CLI subagents through an injected MCP server while each CLI's built-in delegation is suppressed. This file is navigation, not a rule restatement.
+Agent Conductor is a **VS Code extension, written in TypeScript**. It runs coding CLIs — Claude Code, Codex, Gemini CLI, Copilot CLI, any ACP agent — over the **Agent Client Protocol (ACP v1)**. The user picks the CLI, model and effort for each session. One agent can hand work to agents on other CLIs through a small server we inject, while each CLI's own way of doing that is switched off.
 
-**TypeScript only** — extension, conductor core, and MCP shim are all TypeScript; no other implementation languages (ADR-0003). Keep it simple and clean: prefer deleting code to abstracting it.
+This file tells you where to look. It does not repeat the rules that live elsewhere.
 
-## Communication
+**TypeScript only** — the extension, the core, and the injected server are all TypeScript. No other languages (ADR-0003). Prefer deleting code to abstracting it.
 
-Terse for chat, status, findings, and handoffs. Full clarity for destructive, security, auth/ToS, or ambiguous work.
+## How to write
 
-## MUST: Where to look — task → doc
+Be brief in chat, status updates, findings and handoffs. Be complete when the work is destructive, security-related, about authentication or terms of service, or when the request is unclear.
 
-| Doing this | Read |
+## MUST: which doc to read
+
+| If you are | Read |
 |---|---|
-| Naming a type, setting, tool, event, or concept | `UBIQUITOUS.md` (authoritative glossary) |
-| Changing layering, components, or protocol boundaries | `ARCHITECTURE.md` |
-| Working as, or spawning, a persona | `PERSONAS.md` |
-| Understanding why a choice was made (or changing it) | `docs/adr/` — changing an ADR'd decision requires a superseding ADR (`make adr`) |
-| Current milestones and status | `docs/plans/0001-mvp-implementation-plan.md` |
-| Implementation how-to: manifest, settings schema, wizard, code skeletons | `docs/plans/0002-implementation-guide.md` (**temporary** — see plan-file rule below) |
-| Adding or changing an agent runtime | `ARCHITECTURE.md §Runtime catalog` + "Adding a runtime" below |
+| naming a type, setting, tool, event or concept | `UBIQUITOUS.md` — the glossary decides |
+| changing layers, components or protocol boundaries | `ARCHITECTURE.md` |
+| working as, or starting, a persona | `PERSONAS.md` |
+| wondering why something was decided, or changing it | `docs/adr/` — to change a decision, write a new ADR that supersedes the old one (`make adr`) |
+| looking for current status | `docs/plans/0001-mvp-implementation-plan.md` |
+| looking for how-to detail: the manifest, settings, the wizard, code sketches | `docs/plans/0002-implementation-guide.md` (**temporary** — see the rule about plan files below) |
+| adding or changing an agent runtime | `ARCHITECTURE.md §Runtime catalog`, then "Adding a runtime" below |
 
-Markdown is the default doc format. Root-level canon is exactly: `AGENTS.md`, `UBIQUITOUS.md`, `ARCHITECTURE.md`, `PERSONAS.md`. Everything else goes under `docs/` — do not add root-level docs unless instructed.
+Docs are Markdown. The root holds exactly four: `AGENTS.md`, `UBIQUITOUS.md`, `ARCHITECTURE.md`, `PERSONAS.md`. Everything else goes in `docs/`. Do not add a root-level doc unless asked.
 
-## Hard rules (grep-able conventions; `make lint` enforces the first two)
+## Hard rules
 
-- `src/core/**` MUST NOT import `vscode` — it is the extraction seam (ADR-0003). Checked by `make lint` (`reports/core-imports.log`).
-- TypeScript `strict` is on; no `any` without an inline reason comment.
-- ACP discipline: protocol v1 only; every path absolute; `mcpServers` arrays sorted by name (session fingerprinting); on `session/load`/`resume`, always re-send `mcpServers` and `additionalDirectories`.
-- Model and effort lists are **never hardcoded** — discovery via `configOptions`, catalog fallback, and mandatory effective-value read-back (ADR-0005).
-- Permission routing is never bypassed; automatic policy uses Client Operations derived from method + normalized arguments, never Agent-supplied `ToolKind`; a cancelled turn answers `{"outcome":"cancelled"}`.
-- Secrets live in VS Code `SecretStorage`; settings hold opaque references, resolved values are injected as env at spawn, and values are never logged or written to settings JSON.
-- External claims about CLIs and protocols go stale weekly — verify against primary sources before relying; the current unverified list is `docs/plans/0002-implementation-guide.md` Appendix A.
+Written so you can grep for them. `make lint` enforces the first two.
 
-## MUST: Never reference a planning document
+- **`src/core/**` must never import `vscode`.** That is the line that keeps the core runnable outside VS Code (ADR-0003). `make lint` checks it and writes `reports/core-imports.log`.
+- **TypeScript `strict` is on.** No `any` unless a comment on the same line says why.
+- **ACP discipline.** Protocol v1 only. Every path absolute. Sort `mcpServers` by name, because agents treat the list as part of a session's identity. On `session/load` and resume, always send `mcpServers` and `additionalDirectories` again.
+- **Never hardcode model or effort lists.** Ask the agent (`configOptions`), fall back to the catalog, and always read back what the agent says it is actually running (ADR-0005).
+- **Never bypass permission routing.** Automatic decisions are keyed by what *the client* is about to do — worked out from the method and its arguments — never by the `ToolKind` the agent reports. A cancelled turn answers `{"outcome":"cancelled"}`.
+- **Secrets live in VS Code `SecretStorage`.** Settings hold only the name of a secret. Values are resolved when the process starts, and are never logged or written to settings.
+- **Check claims about other CLIs and protocols before relying on them.** They go stale within weeks. The unverified ones are listed in `docs/plans/0002-implementation-guide.md`, Appendix A.
 
-Comments, test names, file names and docs MUST NOT carry review or task identifiers — `P3`, `HIGH-2`, `finding F1`, "see the implementation guide". Files under `docs/plans/` get deleted; the reference outlives them and points a reader at nothing.
+## MUST: never point at a planning document
 
-Reference only what is durable:
+Do not put review or task identifiers — `P3`, `HIGH-2`, `finding F1`, "see the implementation guide" — in comments, test names, file names or docs. Files under `docs/plans/` get deleted, and the reference outlives them, leaving a reader pointed at nothing.
 
-| Reference | Example |
+Point only at things that last:
+
+| Point at | Like this |
 |---|---|
-| An ADR | `see ADR-0004 — suppression is per-runtime, injection is the recursion guard` |
-| A canonical root doc + section | `ARCHITECTURE.md §Data flows`, `UBIQUITOUS.md` |
-| A `UBIQUITOUS.md` term | say `Runtime`, `Brief`, `Shim`, `Read-back` — the glossary word, not a ticket |
+| an ADR | `see ADR-0004 — suppression is per-runtime, injection is the recursion guard` |
+| a root doc and section | `ARCHITECTURE.md §Data flows`, `UBIQUITOUS.md` |
+| a glossary term | say `Runtime`, `Brief`, `Shim`, `Read-back` — the word, not a ticket |
 
-If a plan's decision is worth keeping, promote it to an ADR or a canonical doc **before** the plan is deleted, then point at that.
+If a plan contains a decision worth keeping, move it into an ADR or a root doc **before** the plan is deleted, then point there.
 
-Name test files after the behaviour they pin (`suppression_argv_test.ts`, not `p3_orchestrator_test.ts`).
+Name a test file after the behaviour it protects: `suppression_argv_test.ts`, not `p3_orchestrator_test.ts`.
 
-## How to know you're done
+## How you know you are done
 
-Two commands. That's it.
+Two commands.
 
 ```bash
-make lint   # every static check; one log per checker under reports/
-make test   # unit tests (mock ACP agent, no live CLIs)
+make lint   # every static check; one log per checker in reports/
+make test   # unit tests against a mock agent — no real CLIs
 ```
 
-`make lint` starts by proving the gates can still fail — a planted `vscode` import must be caught, and a failing command inside a piped recipe must not be hidden by the `tee` it writes its log through. A gate that cannot fail reports success forever, so treat a `gate self-test` failure as a broken build, not a broken test.
+`make test` fails a test file that does not exit after its tests finish — one that left a process, socket, or timer running. Without that check the file prints `ok` for every test and the run hangs. `src/test/unit/leak_guard.test.ts` tests the check itself: a leak must fail, a clean file must not.
 
-Both green on your branch. Failures that pre-date your work are still your problem on the branch — fix or revert before declaring done.
+`make lint` starts by proving its own checks can still fail. It plants a `vscode` import and expects it to be caught, and it makes a command fail inside a piped recipe to be sure the `tee` does not hide it. A check that cannot fail reports success forever, so a `gate self-test` failure is a broken build, not a broken test.
 
-Convenience wrappers (same gates, different scopes):
+Both must pass on your branch. Failures that were there before you started are still yours to fix or revert before you call the work done.
+
+Wider versions of the same checks:
 
 ```bash
 make check       # build + lint + test
-make check-all   # build + lint + test + test-integration (VS Code host + mock agent)
+make check-all   # the above + the VS Code extension tests against a mock agent
 ```
 
-Keep output context-efficient: full logs to `reports/`, report command/status/count/duration for passing runs, read failure sections only.
+Keep output small: full logs go to `reports/`. For a passing run, report the command, the status, the count and the time. Only read the failing parts.
 
-Never run `vsce publish` — packaging is `make package` / `make package-rich`; publishing is a human action.
+Never run `vsce publish`. Building the extension file is `make package` / `make package-rich`; publishing it is a human decision.
 
 ## Adding a runtime
 
-1. Add the `RuntimeSpec` to the catalog (`src/core/runtimeRegistry.ts`): launch, detection, login command, quirks.
-2. Write its `SuppressionPlan` (`src/core/policy.ts`) and a golden argv/env/`_meta` test beside it.
-3. Wire wizard hints (auth probe uses ACP `authMethods` — no per-CLI hacks unless the protocol offers nothing).
-4. New terms → `UBIQUITOUS.md`; new trade-off → ADR.
-5. `make check` green.
+1. Add its `RuntimeSpec` to the catalog (`src/core/runtimeRegistry.ts`): how to launch it, how to detect it, how to log in, and its quirks.
+2. Write its `SuppressionPlan` (`src/core/policy.ts`) with a test beside it that pins the exact arguments, environment and `_meta`.
+3. Add wizard hints. The authentication check uses ACP's `authMethods` — do not special-case a CLI unless the protocol offers nothing.
+4. New terms go in `UBIQUITOUS.md`. New trade-offs get an ADR.
+5. `make check` passes.

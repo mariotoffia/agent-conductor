@@ -1,30 +1,42 @@
-# ADR-0009: Worktree and provider isolation
+# ADR-0009: Worktrees keep changes apart, not agents
 
 - Status: accepted
 - Date: 2026-08-18
 
 ## Context
 
-A Git worktree separates branches and working files, but an Agent process can still access any path allowed by the operating system. Passing the parent repository through ACP `additionalDirectories` cannot make it read-only. Delegating to another Runtime can also move repository data across provider boundaries even when the Brief contains only paths.
+A Git worktree separates branches and working files. It does not stop an agent process reading any path the operating system allows.
+
+Passing the parent repository through ACP's `additionalDirectories` cannot make it read-only either.
+
+Handing work to another runtime can also move repository data across a provider boundary, even when the Brief contains nothing but file paths.
 
 ## Decision
 
-**Isolation** is a change-coordination mode, never a security boundary. Worktree allocation uses unique Session identities and branches, serializes Git mutations, records intent before creation, and reconciles abandoned allocations on activation. Cleanup is explicit; dirty worktrees are never deleted automatically.
+**Isolation is a way to keep changes from colliding. It is never a security boundary.**
 
-The parent repository is omitted from child `additionalDirectories` by default. Additional directories are sent only when the Agent advertises support and the user-authorized Session requires them.
+Allocating a worktree uses unique session identities and branch names, runs Git changes one at a time, records what it intends to do before doing it, and reconciles anything left over when the extension next starts. Cleanup is explicit: a worktree with uncommitted changes is never deleted automatically.
 
-Cross-provider orchestration is disabled by default. Before first use, the user receives a data-egress notice and approves target Runtime Trust fingerprints. Provider labels are disclosures, not authorization identities. Unknown, custom, or changed launch fingerprints require renewed consent. A Brief remains self-contained and path-oriented, but documentation does not claim that this prevents an Agent or provider from reading repository data.
+**A child does not get the parent repository** in `additionalDirectories` by default. Extra directories are sent only when the agent says it supports them and the session the user authorized actually needs them.
+
+**Delegating across providers is off by default.** Before the first time, the user is told what data would leave, and approves the target runtime's trust fingerprint. Provider labels inform the user; they are not what we authorize against. An unknown, custom, or changed launch fingerprint has to be approved again.
+
+A Brief stays self-contained and made of paths. But our documentation does not claim that this stops an agent, or a provider, from reading repository data.
 
 ## Alternatives considered
 
-- Describe worktrees as read-only or secure isolation: rejected because Git and ACP provide no such enforcement.
-- Grant every child the parent repository: rejected because it defeats the intended separation and expands exposure.
-- Infer provider consent from Runtime connection: rejected because direct execution and cross-provider delegation have different data flows.
-- Delete worktrees automatically at Session end: rejected because crashes and uncommitted work can make cleanup destructive.
+- **Describe worktrees as read-only or secure.** Rejected: neither Git nor ACP enforces anything of the kind.
+- **Give every child the parent repository.** Rejected: it defeats the separation and widens exposure.
+- **Infer provider consent from the fact that a runtime is connected.** Rejected: running an agent directly and delegating to it across providers move data differently.
+- **Delete worktrees automatically when a session ends.** Rejected: with crashes and uncommitted work, that deletes real work.
 
 ## Consequences
 
-Worktree mode improves merge and change coordination without overstating security. The Orchestrator needs a journal, Git lock, reconciliation, and explicit cleanup UI. Cross-provider delegation adds a one-time consent step and records the target Runtime/provider in Session metadata without storing credentials or hidden prompt content.
+Worktree mode makes merges and parallel changes easier without overstating what it protects.
+
+The Orchestrator needs a journal, a lock around Git, reconciliation on startup, and a way for the user to clean up.
+
+Cross-provider delegation costs a one-time consent step. We record which runtime and provider a session used, and store no credentials and no hidden prompt content.
 
 ## References
 

@@ -1,19 +1,35 @@
-# ADR-0006: Auth posture — inherit CLI logins; subscription fan-out is opt-in and flagged
+# ADR-0006: Inherit the logins the user's CLIs already have
 
-- Status: accepted
+- Status: superseded by ADR-0010
 - Date: 2026-08-18
+- Superseded by: ADR-0010
+
+> Kept as a record of what was decided on 2026-08-18. The active decision about
+> authentication is ADR-0010, which requires an API key for Claude by default.
 
 ## Context
 
-CLIs read credentials from their own homes, so spawned agents inherit the user's existing logins. Anthropic's policy: third-party developers must not offer claude.ai login or route through Pro/Max credentials; Pro/Max limits assume "ordinary, individual usage" — parallel fan-out is the likeliest tripwire. The claude adapter ships `--hide-claude-auth` for exactly this. Codex/Copilot have plan-scoped rate windows and seat rules.
+Each CLI reads credentials from its own home directory, so an agent we start inherits whatever the user is already logged in as.
+
+Anthropic's policy says a third-party developer must not offer claude.ai login, and must not route through Pro or Max credentials. Those plans assume "ordinary, individual usage", and running many agents in parallel is the most likely way to breach that. The Claude adapter ships `--hide-claude-auth` for exactly this situation.
+
+Codex and Copilot have their own rate windows and seat rules, which depend on the plan.
 
 ## Decision
 
-Default: inherit whatever auth the user's CLIs already have; never collect or proxy credentials ourselves. Expose `agentConductor.claude.hideSubscriptionAuth` (forces API-key auth) and show a one-time notice before first subscription-backed subagent fan-out. API keys live only in VS Code SecretStorage, injected as env at spawn, never logged. Re-verify vendor policies before each release (they changed twice in 2026).
+By default, inherit whatever authentication the user's CLIs already have. Never collect or proxy credentials ourselves.
+
+Offer `agentConductor.claude.hideSubscriptionAuth`, which forces API-key authentication. Show a one-time notice before the first time subagents fan out on subscription credentials.
+
+API keys live only in VS Code SecretStorage. They are passed to the child process as environment variables at startup, and never logged.
+
+Check each vendor's policy again before every release. They changed twice during 2026.
 
 ## Consequences
 
-Zero-friction start for CLI users; a compliant path for teams via API keys. Cost: a policy-watch duty on the Release Engineer persona.
+A user with a working CLI can start immediately, and a team has a compliant path through API keys.
+
+The cost is a standing duty on the Release Engineer persona to watch those policies.
 
 ## References
 

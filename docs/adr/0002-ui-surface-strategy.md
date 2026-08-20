@@ -1,19 +1,33 @@
-# ADR-0002: UI surface — stable chat participant first, chatSessions as a VSIX channel
+# ADR-0002: A stable chat participant first, with a second build for the richer UI
 
 - Status: accepted
 - Date: 2026-08-18
 
 ## Context
 
-The ideal surface (`chatSessionsProvider` + `chatParticipantAdditions`) is proposed API: hard-gated at the contribution point and unpublishable to the Marketplace. The stable `LanguageModelChatProvider` route is the wrong abstraction (flattens a harness into a token endpoint inside Copilot's loop). Anthropic's own extension ships a custom webview on stable APIs only.
+The UI we actually want uses `chatSessionsProvider` and `chatParticipantAdditions`. Both are proposed APIs. VS Code blocks them at the contribution point, and an extension that uses them cannot be published to the Marketplace.
+
+The stable alternative, `LanguageModelChatProvider`, is the wrong abstraction. It flattens a whole harness into a token endpoint inside Copilot's loop.
+
+Anthropic's own extension takes the same route we propose here: a custom webview built on stable APIs only.
 
 ## Decision
 
-Marketplace build renders through a stable chat participant (`@conductor`) plus a sessions tree view and targeted webviews for what the participant stream cannot draw. A second build channel (sideloaded VSIX, generated manifest) enables `chatSessionsProvider`/`chatParticipantAdditions` for first-class session UI. One render map, two sinks; core is surface-agnostic. `registerLanguageModelChatProvider` is not used.
+The Marketplace build renders through a stable chat participant, `@conductor`, plus a sessions tree view and small webviews for anything the participant's stream cannot draw.
+
+A second build channel — a sideloaded extension file, from a generated manifest — turns on `chatSessionsProvider` and `chatParticipantAdditions` for the better session UI.
+
+One render map feeds both. The core does not know which surface it is drawing to.
+
+We do not use `registerLanguageModelChatProvider`.
 
 ## Consequences
 
-Public availability today at the cost of degraded tool-call/diff rendering in the Marketplace build. The rich build must track proposal churn (version-pinned). If Microsoft finalizes the sessions API, the channels merge.
+We can ship today. The price is worse tool-call and diff rendering in the Marketplace build.
+
+The richer build has to keep up with changes to the proposed APIs, so it pins the VS Code version.
+
+If Microsoft finalises the sessions API, the two channels become one.
 
 ## References
 

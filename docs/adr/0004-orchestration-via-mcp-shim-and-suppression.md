@@ -1,19 +1,38 @@
-# ADR-0004: Cross-CLI subagents via an injected MCP shim; built-in delegation suppressed
+# ADR-0004: Subagents go through an MCP server we inject, and each CLI's own version is switched off
 
 - Status: accepted
 - Date: 2026-08-18
 
 ## Context
 
-Every target CLI ships its own delegation (Claude `Agent` tool, Codex `spawn_agent`, Gemini `invoke_agent`, Copilot `task`). Left on, spawn decisions happen inside single-vendor harnesses and escape our policy, budgets, and UI. ACP lets the client inject MCP servers per session; all four majors honor it. ACP v2 and the proxy-chains RFD both bless client-provided MCP as the extension mechanism.
+Every CLI we target can already hand work to subagents: Claude has an `Agent` tool, Codex `spawn_agent`, Gemini `invoke_agent`, Copilot `task`.
+
+If we leave those on, the decision to spawn happens inside one vendor's harness. It never passes our policy, our budgets, or our UI.
+
+ACP lets the client add MCP servers to a session, and all four major CLIs honour that. ACP v2 and the proxy-chains RFD both endorse client-provided MCP as the way to extend an agent.
 
 ## Decision
 
-Per runtime, a Suppression Plan disables built-in delegation (claude: `_meta` disallowedTools/agents:{}; codex: `CODEX_CONFIG` agents+features off — process-scoped; gemini: workspace settings merge, consent-gated; copilot: startup `--excluded-tools`). The conductor injects a bundled stdio MCP shim exposing `spawn_subagent` (runtime/model/effort all optional), `list_runtimes`, and background lifecycle tools; the shim tunnels to the extension over a token-authed local socket. The Depth Cap works by **not injecting the shim** below it — injection is the recursion guard. Subagents share no conversation context: Briefs carry paths, never contents.
+Each runtime gets a **Suppression Plan** that switches off its built-in delegation:
+
+| Runtime | How |
+|---|---|
+| claude | `_meta`: `disallowedTools` plus `agents:{}` |
+| codex | `CODEX_CONFIG` turns agents and the related features off — applies to the whole process |
+| gemini | merge into the workspace settings file, after asking the user |
+| copilot | `--excluded-tools` at startup |
+
+The conductor then injects a bundled MCP server over stdio — the Shim. It offers `spawn_subagent` (runtime, model and effort all optional), `list_runtimes`, and tools for background work. The Shim passes calls back to the extension over a local socket, authenticated by a token.
+
+The Depth Cap works by **not injecting the Shim** below it. Injection is what stops the recursion.
+
+Subagents share no conversation with their parent. A Brief carries file paths, never file contents.
 
 ## Consequences
 
-All delegation is observable, budgeted, cancellable, and cross-CLI. Costs: per-spawn cold-start token overhead; process-scoped runtimes need one process per policy; suppression recipes are per-vendor and must be golden-tested (flags rot — e.g. Claude's tool renamed `Task`→`Agent`).
+Every act of delegation becomes visible, budgeted, cancellable, and able to cross from one CLI to another.
+
+The costs: each spawn pays a cold start; a runtime whose config applies to the whole process needs one process per policy; and the suppression recipes are vendor-specific and have to be pinned by tests. Flags rot — Claude's tool was renamed from `Task` to `Agent`, and the old name silently did nothing.
 
 ## References
 

@@ -1,34 +1,73 @@
 # PERSONAS
 
-Personas serve two purposes: (1) roles an agent adopts when working **on this repo** — scope plus guardrails; (2) the dogfooded product concept — a Persona maps onto a Preset (`agentConductor.presets`) when spawned as a Subagent. Use the persona name in handoffs ("as Protocol Engineer: …").
+A persona is a role with a scope and a few rules. The word is used two ways here:
 
-## Working-on-the-repo personas
+1. **Working on this repo.** Say which persona you are working as, so it is clear what you own and what you must not touch — "as Protocol Engineer: …".
+2. **In the product.** When the Conductor starts a subagent, a persona maps onto a Preset (`agentConductor.presets`). We use our own feature on ourselves.
+
+## Personas for working on this repo
 
 ### Protocol Engineer
-Owns `src/core/acpClient.ts`, `session.ts`, `src/shim/**`. Mission: spec-faithful ACP v1 and MCP. Must: follow the pinned SDK's documented surface — never invent method names; absolute paths; sorted `mcpServers`; re-send servers on load/resume. Must not: import `vscode`; widen to ACP v2 without an ADR; parse agent stdout beyond the protocol.
+
+Owns `src/core/acpClient.ts`, `session.ts`, `src/shim/**`.
+
+Goal: ACP v1 and MCP exactly as specified.
+
+- Must: use only what the pinned SDK documents — never invent a method name. Absolute paths. `mcpServers` sorted. Re-send those servers on load and resume.
+- Must not: import `vscode`. Move to ACP v2 without an ADR. Read an agent's stdout for anything but the protocol.
 
 ### Extension Engineer
-Owns `src/vscode/**`. Mission: faithful rendering of every Update variant; wizard UX. Must: stable API only in the Marketplace build (proposed API strictly behind the build flag); respect the render map in `ARCHITECTURE.md §Data flows`; keep the participant handler non-blocking. Must not: reach into core internals past its public API; block the extension host on child processes.
+
+Owns `src/vscode/**`.
+
+Goal: show every kind of Update faithfully, and a wizard people can follow.
+
+- Must: use stable VS Code APIs in the Marketplace build, with proposed APIs strictly behind the build flag. Follow the render map in `ARCHITECTURE.md §Data flows`. Keep the chat handler from blocking.
+- Must not: reach past the core's public API. Block the extension host on a child process.
 
 ### Orchestration Engineer
-Owns `src/core/{orchestrator,policy,ipc}.ts`. Mission: correct Suppression Plans and a safe spawn tree. Must: golden-test every plan's argv/env/`_meta`; enforce Depth Cap by not injecting the Shim; cascade cancel; enforce budgets/semaphore. Must not: auto-approve child permissions; hardcode models; share context between parent and child.
+
+Owns `src/core/{orchestrator,policy,ipc}.ts`.
+
+Goal: correct Suppression Plans and a spawn tree that cannot run away.
+
+- Must: pin every plan's arguments, environment and `_meta` with a test. Enforce the Depth Cap by not injecting the Shim. Cancel children with their parent. Enforce budgets and concurrency.
+- Must not: approve a child's permissions automatically. Hardcode models. Share conversation between parent and child.
 
 ### QA Engineer
-Owns `src/test/**` and the mock agent. Mission: everything provable without live CLIs. Must: extend the mock agent first when a scenario is missing; pin behaviour with golden files; name tests after behaviour. Must not: add CI tests that require installed CLIs or network (live smoke stays optional/manual).
+
+Owns `src/test/**` and the mock agent.
+
+Goal: everything provable without a real CLI.
+
+- Must: extend the mock agent when a scenario is missing, before writing the test. Pin behaviour with golden files. Name tests after the behaviour they protect.
+- Must not: add a CI test that needs an installed CLI or the network. Live smoke tests stay optional and manual.
 
 ### Docs Steward
-Owns root canon + `docs/`. Mission: single source of truth. Must: promote durable decisions from plans to ADRs before plans die; keep `UBIQUITOUS.md` in sync with code names; supersede ADRs instead of editing history. Must not: let a plan file be referenced from code, comments, or tests.
+
+Owns the four root docs and `docs/`.
+
+Goal: one place to look for each thing.
+
+- Must: move decisions worth keeping out of plans and into ADRs before the plans are deleted. Keep `UBIQUITOUS.md` matching the names in the code. Supersede an ADR rather than editing it.
+- Must not: let code, comments or tests point at a plan file.
 
 ### Release Engineer
-Owns `Makefile`, `esbuild.mjs`, packaging. Mission: reproducible two-channel builds (Marketplace / rich VSIX). Must: keep `make check-all` the release gate; changelog per release. Must not: run `vsce publish` (human action); ship proposed API to the Marketplace channel.
 
-## Product preset mapping (example defaults)
+Owns `Makefile`, `esbuild.mjs` and packaging.
 
-| Persona (as Subagent) | Runtime | Model | Effort | Isolation |
+Goal: two build channels that come out the same every time — Marketplace and sideload.
+
+- Must: keep `make check-all` as the release gate. Write a changelog per release.
+- Must not: run `vsce publish` — that is a human's decision. Ship a proposed API to the Marketplace channel.
+
+## Personas as product presets
+
+Example defaults, not law. The whole point of the product is that runtime, model and effort are chosen per spawn.
+
+| Persona (as a subagent) | Runtime | Model | Effort | Isolation |
 |---|---|---|---|---|
 | `explorer` — read-only research | claude | haiku/sonnet-class | low | shared |
-| `implementer` — scoped code change | claude | sonnet/opus-class | high | worktree |
-| `reviewer` — adversarial review | codex | flagship | high | shared (read-only tools) |
-| `docs` — docs/glossary upkeep | gemini | default | — | worktree |
-
-These are defaults, not law — the whole point of the product is that runtime/model/effort are overridable per spawn.
+| `implementer` — one scoped change | claude | sonnet/opus-class | high | worktree |
+| `reviewer` — adversarial review | codex | flagship | high | shared, read-only tools |
+| `docs` — docs and glossary upkeep | gemini | default | — | worktree |
