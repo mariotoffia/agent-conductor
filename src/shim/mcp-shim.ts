@@ -16,7 +16,10 @@ function arg(name: string): string | undefined {
 }
 
 const socketPath = arg("socket");
-const token = arg("token");
+// The capability token comes from the environment, never from argv: process
+// arguments are readable by any local process — `/proc/<pid>/cmdline` on Linux,
+// `ps` on macOS — and a token anyone can read authenticates anyone.
+const token = process.env.AGENT_CONDUCTOR_SESSION_TOKEN;
 
 const server = new McpServer({ name: "orchestrator", version: "0.0.1" });
 

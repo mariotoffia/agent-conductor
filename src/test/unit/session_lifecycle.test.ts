@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { test, type TestContext } from "node:test";
+import { nodeProcessPort, type AgentProcess } from "../../core/index.js";
 import { harness, launchMockAgent, turnGate } from "../acp-harness.js";
 
 const testTimeoutMs = 10_000;
@@ -231,4 +232,45 @@ sessionTest("a failed turn carries the Agent's own diagnostics", async (t) => {
   process.kill(pid, "SIGKILL");
 
   await failed;
+});
+
+test("an agent that answers session/new without a session id gets no session", async (t) => {
+  const h = harness(t);
+
+  // Responses to the requests a client sends are not schema-checked by the SDK,
+  // so the field the whole session identity rests on has to be checked here.
+  await assert.rejects(h.open({ launch: launchMockAgent("no-session-id") }), /session id/i);
+});
+
+test("a disposal that fails is neither unhandled nor permanent", async (t) => {
+  const failures: string[] = [];
+  const started: AgentProcess[] = [];
+  const h = harness(t, {
+    process: {
+      spawn(request) {
+        const child = nodeProcessPort.spawn(request);
+        started.push(child);
+        return {
+          ...child,
+          kill: () => {
+            failures.push("kill");
+            throw new Error("signal refused");
+          },
+        };
+      },
+    },
+  });
+  // Nothing else will: the port under test is the thing refusing to signal.
+  t.after(() => {
+    for (const child of started) child.kill("SIGKILL");
+  });
+  const session = await h.open();
+
+  // A rejected disposal is memoized, so a later teardown — the extension's own —
+  // would reject too, on a promise nobody is waiting on.
+  await session.dispose();
+  await session.dispose();
+
+  assert.ok(failures.length > 0, "the disposal never tried to stop the process");
+  assert.equal(session.state, "disposed");
 });

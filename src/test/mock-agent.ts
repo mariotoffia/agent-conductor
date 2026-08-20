@@ -2,6 +2,7 @@
 
 import { Readable, Writable } from "node:stream";
 import { resolve } from "node:path";
+import { spawn } from "node:child_process";
 import * as acp from "@agentclientprotocol/sdk";
 
 const configOptions: acp.SessionConfigOption[] = [
@@ -121,6 +122,11 @@ const app = acp
     if (mode === "crash-on-session-new") {
       setImmediate(() => process.exit(42));
       return new Promise<never>(() => undefined);
+    }
+    // `no-session-id` answers without the one field the client's whole session
+    // identity comes from; responses to client requests are not schema-checked.
+    if (mode === "no-session-id") {
+      return { ...configOptionsFor(mode) } as unknown as acp.NewSessionResponse;
     }
     const sessionId = `mock-session-${nextSession++}`;
     sessions.set(sessionId, context.params);
@@ -374,6 +380,25 @@ const stream = acp.ndJsonStream(
   Writable.toWeb(process.stdout),
   Readable.toWeb(process.stdin),
 );
+// `spawns-child` behaves like every real agent CLI: it starts helper processes
+// of its own — MCP servers, tool runners — that outlive it unless the client
+// stops the whole process group.
+if (mode === "spawns-child") {
+  const log = process.env.MOCK_AGENT_WORKER_LOG;
+  if (log) {
+    const worker = spawn(
+      process.execPath,
+      [
+        "-e",
+        "setInterval(() => require('node:fs').appendFileSync(process.argv[1], 'x'), 25)",
+        log,
+      ],
+      { stdio: "ignore" },
+    );
+    worker.unref();
+  }
+}
+
 if (mode === "stderr") {
   process.stderr.write("mock-agent stderr\n");
 }

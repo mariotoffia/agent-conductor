@@ -1,10 +1,14 @@
 import assert from "node:assert/strict";
+import { mkdtemp, readFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { resolve } from "node:path";
 import { test, type TestContext } from "node:test";
 import * as acp from "@agentclientprotocol/sdk";
 import {
   ConductorSession,
   nodeProcessPort,
+  type AgentProcess,
   type AgentExit,
   type ProcessPort,
   type SessionPorts,
@@ -358,4 +362,78 @@ acpTest("an Agent that dies during session/new reports the stage and its exit st
   );
 
   assert.ok(reaped(await h.children[0].exited), "the crashed Agent must be reaped");
+});
+
+test("closing a session stops the helper processes the agent started", { skip: process.platform === "win32", timeout: 20_000 }, async (t) => {
+  const log = join(await mkdtemp(join(tmpdir(), "conductor-agent-")), "worker.log");
+  const h = harness(t);
+  const session = await h.open({
+    launch: { ...launchMockAgent("spawns-child"), env: { MOCK_AGENT_WORKER_LOG: log } },
+  });
+  // Every agent CLI starts processes of its own; they are the session's to stop.
+  await waitFor(async () => (await readFile(log, "utf8").catch(() => "")).length > 0);
+
+  await session.dispose();
+  await new Promise((wake) => setTimeout(wake, 250));
+  const settled = (await readFile(log, "utf8")).length;
+  await new Promise((wake) => setTimeout(wake, 300));
+
+  assert.equal((await readFile(log, "utf8")).length, settled, "the agent's worker outlived its session");
+});
+
+async function waitFor(condition: () => Promise<boolean>): Promise<void> {
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    if (await condition()) return;
+    await new Promise((wake) => setTimeout(wake, 50));
+  }
+  assert.fail("condition never held");
+}
+
+test("an agent whose process group has ended is not signalled on its old id", async (t) => {
+  const h = harness(t);
+  const session = await h.open();
+
+  // Stands in for the system's answers. A process group id outlives the group,
+  // and a Session whose Agent died may not be torn down for hours — long enough
+  // for that id to be handed to somebody else, which is what `recycled` is.
+  const signalled: number[] = [];
+  let recycled = false;
+  const realKill = process.kill.bind(process);
+  process.kill = ((pid: number, signal?: string | number) => {
+    if (signal !== 0) signalled.push(pid);
+    if (recycled && pid < 0) return true; // somebody else's group answers now
+    return realKill(pid, signal as NodeJS.Signals);
+  }) as typeof process.kill;
+  t.after(() => {
+    process.kill = realKill;
+  });
+
+  h.children[0]?.kill("SIGKILL");
+  await session.exited;
+  signalled.length = 0;
+  recycled = true;
+
+  await session.dispose();
+
+  assert.deepEqual(signalled.filter((pid) => pid < 0), [], "an ended group was signalled");
+});
+
+test("a refused handshake keeps its reason even when the teardown itself fails", async (t) => {
+  const started: AgentProcess[] = [];
+  const h = harness(t, {
+    process: {
+      spawn(request) {
+        const child = nodeProcessPort.spawn(request);
+        started.push(child);
+        return { ...child, kill: () => { throw new Error("signal refused"); } };
+      },
+    },
+  });
+  t.after(() => {
+    for (const child of started) child.kill("SIGKILL");
+  });
+
+  // The handshake is what failed; a teardown that fails on the way out must not
+  // replace the diagnosis with its own.
+  await assert.rejects(h.open({ launch: launchMockAgent("bad-protocol") }), /protocol version/);
 });

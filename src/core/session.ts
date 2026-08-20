@@ -298,7 +298,15 @@ export class ConductorSession {
       this.#state = "disposed";
       this.#clearGrace();
       this.#clearStall();
-      await this.#connection?.close();
+      try {
+        await this.#connection?.close();
+      } catch (error) {
+        // A rejected disposal would be memoized here: every later teardown —
+        // including the extension's own — would reject too, and the cancel-grace
+        // timer calls this with nobody waiting on the promise. The Session is
+        // gone either way; what went wrong belongs in the log, not in a throw.
+        this.#log("error", `session ${this.#sessionId}: disposal failed: ${message(error)}`);
+      }
     })();
     return this.#disposal;
   }
@@ -358,6 +366,12 @@ export class ConductorSession {
       }),
       "session/new",
     );
+    // The SDK schema-checks the notifications a Client receives, not the answers
+    // to the requests it sends. Everything this Session does is addressed by this
+    // id, so it is checked rather than assumed (ADR-0007).
+    if (typeof response.sessionId !== "string" || response.sessionId === "") {
+      throw new Error("agent answered session/new without a session id");
+    }
     this.#sessionId = response.sessionId;
     this.#configOptions = asConfigOptions(response.configOptions);
   }

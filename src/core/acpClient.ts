@@ -1,4 +1,4 @@
-import { spawn } from "node:child_process";
+import { spawn, type ChildProcess } from "node:child_process";
 import { isAbsolute } from "node:path";
 import { Readable, Writable } from "node:stream";
 import * as acp from "@agentclientprotocol/sdk";
@@ -20,6 +20,8 @@ const STDERR_TAIL_CHARS = 8 * 1024;
 const SIGTERM_ESCALATION_MS = 2_000;
 /** How long a Runtime may take to answer a session-setup request. */
 export const DEFAULT_SETUP_TIMEOUT_MS = 60_000;
+/** Process groups are a POSIX notion; Windows has no equivalent through Node. */
+const POSIX = process.platform !== "win32";
 
 /** Real timers, unreferenced so a pending grace period never holds Node open. */
 export const systemClock: ClockPort = {
@@ -36,6 +38,11 @@ export const systemClock: ClockPort = {
  * `shell` is never enabled: argv reaches the child verbatim, so a runtime
  * argument from settings cannot become a shell command. The environment is
  * passed through exactly as built by `buildSpawnRequest` — the port adds nothing.
+ *
+ * The Agent gets its own process group, because every CLI in the catalog starts
+ * helpers of its own — MCP servers, tool runners — and a Session that stopped
+ * only the process it spawned would leave those holding ports and file handles
+ * behind it (ADR-0008: a Session owns its process for its whole life).
  */
 export const nodeProcessPort: ProcessPort = {
   spawn(request: SpawnRequest): AgentProcess {
@@ -45,15 +52,27 @@ export const nodeProcessPort: ProcessPort = {
       stdio: ["pipe", "pipe", "pipe"],
       shell: false,
       windowsHide: true,
+      detached: POSIX,
     });
     if (!child.stdin || !child.stdout || !child.stderr) {
       throw new Error(`${request.command}: stdio pipes unavailable`);
     }
     const stderr = child.stderr;
     stderr.setEncoding("utf8");
+    // A broken diagnostics pipe is not a Session failure, but an `error` event
+    // with no listener is an uncaught exception in the extension host.
+    stderr.on("error", () => undefined);
     const exited = new Promise<AgentExit>((settle) => {
       child.once("error", (error) => settle({ code: null, signal: null, error }));
       child.once("exit", (code, signal) => settle({ code, signal }));
+    });
+    // A process group id outlives the group, and a Session whose Agent died may
+    // not be torn down for hours — long enough for the system to give that id to
+    // somebody else. So the question is asked once, while the answer still means
+    // what it says, and remembered.
+    let groupEnded = false;
+    void exited.then(() => {
+      groupEnded = child.pid === undefined || !groupExists(child.pid);
     });
 
     return {
@@ -64,12 +83,47 @@ export const nodeProcessPort: ProcessPort = {
         stderr.on("data", (chunk: string) => handler(chunk));
       },
       exited,
-      kill: (signal) => {
-        child.kill(signal);
-      },
+      kill: (signal) => killGroup(child, signal, groupEnded),
     };
   },
 };
+
+/**
+ * Signals the Agent's whole process group, so what the Agent started stops with
+ * it — but never a group already seen to end, because that id is free for the
+ * system to give to somebody else and a later question cannot tell the two
+ * apart. No timer watches for the group ending after that: unlike a terminal,
+ * whose id a Session holds while the Agent keeps working, this is asked at the
+ * one moment the Agent's own process is known to be gone.
+ */
+function killGroup(child: ChildProcess, signal: "SIGTERM" | "SIGKILL", ended: boolean): void {
+  const pid = child.pid;
+  if (POSIX && !ended && pid !== undefined && groupExists(pid)) {
+    try {
+      process.kill(-pid, signal);
+      return;
+    } catch {
+      // It may have ended between the question and the answer.
+    }
+  }
+  // Sends nothing once the child has been reaped, so this cannot reach a
+  // process that merely inherited its pid.
+  try {
+    child.kill(signal);
+  } catch {
+    // Already gone, or never started: nothing left to stop.
+  }
+}
+
+function groupExists(pid: number): boolean {
+  try {
+    process.kill(-pid, 0); // signal 0 delivers nothing; it only asks
+    return true;
+  } catch (error) {
+    // Only "no such group" is an answer. No permission to ask is not.
+    return (error as NodeJS.ErrnoException).code !== "ESRCH";
+  }
+}
 
 export interface AgentLaunchOptions {
   runtimeId: string;
@@ -167,8 +221,15 @@ export async function connectAgent(options: AgentConnectionOptions): Promise<Age
   const clock = ports.clock ?? systemClock;
   const connection = clientApp(options).connect(acp.ndJsonStream(child.stdin, child.stdout));
   const close = async (): Promise<AgentExit> => {
-    connection.close();
-    child.kill("SIGTERM");
+    // Both halves happen, in this order, whatever either of them does: the
+    // process first because teardown must not depend on the connection, and the
+    // connection regardless because a process that refused to be signalled is
+    // no reason to keep talking to it.
+    try {
+      child.kill("SIGTERM");
+    } finally {
+      connection.close();
+    }
     // Teardown must not depend on the Agent's cooperation: a custom Runtime that
     // ignores SIGTERM would otherwise hang dispose — and with it the handshake
     // failure path, which awaits this too.
@@ -211,7 +272,9 @@ export async function connectAgent(options: AgentConnectionOptions): Promise<Age
       );
     }
   } catch (error) {
-    const exit = await close();
+    // The handshake is what failed; a teardown that fails on the way out must
+    // not replace the diagnosis with its own.
+    const exit = await close().catch(() => undefined);
     // Which of the two ended the other cannot be inferred after the fact: a
     // Runtime that handles SIGTERM exits with a code, exactly like one that died
     // on its own. So report both facts rather than guessing between them — the
