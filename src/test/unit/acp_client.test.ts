@@ -29,6 +29,7 @@ function deadOnArrivalPort(): ProcessPort {
       stdout: new ReadableStream<Uint8Array>(), // never delivers, never ends
       onStderr: () => undefined,
       exited: Promise.resolve({ code: 7, signal: null }),
+      stderrEnded: Promise.resolve(),
       kill: () => undefined,
     }),
   };

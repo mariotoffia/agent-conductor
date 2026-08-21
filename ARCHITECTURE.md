@@ -68,7 +68,15 @@ The core's own API follows ACP's shape. That is what lets it run under plain Nod
 
 ## Data flows
 
-**Prompt.** Chat input → participant → `ConductorSession`. The session owns one agent process, created with `session/new`: the workspace as `cwd`, `mcpServers` sorted by name (including the Shim only when orchestration is on, the runtime is trusted, suppression is verified, and depth allows), and the Suppression Plan in `_meta`. Then `session/prompt`, the update pump, the render map, and a stop reason.
+**Prompt.** Chat input → participant → `ConductorSession`. Two gates come first and in this order: the window's trust, then the runtime's, re-derived from a fresh resolution rather than read from a record. The session owns one agent process, created with `session/new`: the workspace as `cwd`, `mcpServers` sorted by name (including the Shim only when orchestration is on, the runtime is trusted, suppression is verified, and depth allows), and the Suppression Plan in `_meta`. Then `session/prompt`, the update pump, the render map, and a stop reason.
+
+A session runs one turn at a time, so a second submission is refused rather than allowed to disturb the one in flight. The turn is marked as under way before anything is awaited, because the window that matters opens at the first wait: starting the agent is the slowest part of a turn, and a second submission that raced through it would open a second session — whose process nobody then owns. The turn owns where its updates are drawn, which is what stops a later turn from taking them, or an earlier turn from losing its own. Between turns there is nowhere to draw, so an agent that keeps talking after a turn ends is logged rather than dropped.
+
+A launch command is looked up before anything runs: the file the name lands on after symlinks, and a digest of what that file contains. Both describe the file as it was read, not as it will be spawned — that window is inherent to approving a program in advance, which is why resolution happens per session start rather than once.
+
+A diff the agent reports is shown as two virtual documents, never against the file on disk. What is on disk is what is there now; the agent reported what it wrote. Both sides are bounded, and everything a session recorded is dropped when it closes.
+
+VS Code offers no way to send a chat participant a turn, so the extension-host tests are handed the live participant instead, through an object the extension only builds when VS Code reports the window was started to run tests. That answer comes from the launch arguments rather than from the environment, so nothing else in the host can forge it, and a normal window has no such object at all.
 
 **Spawn.** The model calls `spawn_subagent{runtime?, model?, effort?, brief, …}`. The Shim passes it over the socket to the Orchestrator, which checks the Session Capability, the Runtime Trust fingerprint, provider consent, depth, the semaphore, local limits, and the optional Budget Capability. It fills in Preset defaults, optionally runs `git worktree add`, and opens a child `session/new` on the target runtime — with suppression on, and **no Shim below the Depth Cap**, which is what stops the recursion. The child's updates render nested under the parent's tool call, and its final message becomes the tool result.
 
@@ -162,6 +170,6 @@ A session is busy for the whole of a set, so no turn can start under a configura
 - Orchestration is off by default: no Session Capability is issued, no Shim is injected, and no spawn RPC exists while it is off.
 - Capabilities are per session, revocable, and checked against the active parent, the roots, the allowed methods, the expiry, and current trust.
 - Worktrees coordinate changes; they do not restrict what an agent can reach. A child does not get the parent repository in `additionalDirectories` by default.
-- Secrets and resume tokens live in SecretStorage. Settings and saved sessions hold only references.
+- Secrets and resume tokens live in SecretStorage. Settings and saved sessions hold only references. An agent is started with resolved secrets in its environment, so its own diagnostics are redacted before they reach a log, a failure message or a transcript — and redacted after the buffer is joined, since a value split across two reads is whole again the moment they are concatenated.
 - Claude sessions disable subscription authentication by default (ADR-0010).
 - Depth, concurrency, spawn count and stall limits apply to every subagent. Money limits depend on what the runtime supports.

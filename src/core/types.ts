@@ -152,8 +152,23 @@ export interface ResolvedRuntime {
 // to one ACP surface; a missing port means that capability is not advertised.
 // ---------------------------------------------------------------------------
 
-/** Severity of a log record. The `off` logging setting drops the port instead. */
+/** Severity of a log record. The `off` logging setting drops the record. */
 export type LogLevel = "error" | "info" | "debug" | "trace";
+
+/** Severities from least to most verbose. A configured level names a cut-off here. */
+export const LOG_SEVERITY: readonly LogLevel[] = ["error", "info", "debug", "trace"];
+
+/**
+ * Whether a record of this severity is written at this configured level.
+ *
+ * A level this build does not recognise is treated as the most verbose one, not
+ * the quietest. Silence is the one failure nobody notices, so an unknown level
+ * — which can only be one added after this build — must not produce it.
+ */
+export function logsAt(level: string, severity: LogLevel): boolean {
+  const threshold = LOG_SEVERITY.indexOf(level as LogLevel);
+  return LOG_SEVERITY.indexOf(severity) <= (threshold < 0 ? LOG_SEVERITY.length : threshold);
+}
 
 export interface LogPort {
   log(level: LogLevel, message: string): void;
@@ -189,6 +204,14 @@ export interface AgentProcess {
   /** Agent diagnostics; never ACP traffic. */
   onStderr(handler: (chunk: string) => void): void;
   readonly exited: Promise<AgentExit>;
+  /**
+   * Resolves once no further diagnostics will arrive.
+   *
+   * Separate from `exited` because a finished process is not finished output:
+   * the pipe can still deliver after the exit. A host that cannot tell must
+   * settle this anyway, bounded, so nothing waits on it forever.
+   */
+  readonly stderrEnded: Promise<void>;
   kill(signal: "SIGTERM" | "SIGKILL"): void;
 }
 

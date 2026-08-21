@@ -3,7 +3,7 @@ import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { dirname, isAbsolute, resolve, sep } from "node:path";
 import type * as vscode from "vscode";
 import { z } from "zod";
-import { message, type EffortLevel, type StoragePort } from "../core/index.js";
+import { message, redactSecrets, type EffortLevel, type StoragePort } from "../core/index.js";
 import { CLIENT_OPERATIONS, type ClientOperation } from "./permissions.js";
 import { DEFAULT_ENV_CHARS, MAX_ENV_CHARS } from "./terminals.js";
 
@@ -312,21 +312,9 @@ function firstIssue(error: z.ZodError): string {
   return typeof field === "string" ? `${field} ${issue.message}` : issue.message;
 }
 
-const REDACTED = "[redacted]";
-
-/**
- * Removes resolved secret values from text on its way to a message or a log.
- * Short values are left alone: they are not distinguishing enough to be worth
- * mangling an unrelated message over.
- */
-export function redactSecrets(text: string, values: Iterable<string>): string {
-  let redacted = text;
-  for (const value of values) {
-    if (value.length < 8) continue;
-    redacted = redacted.split(value).join(REDACTED);
-  }
-  return redacted;
-}
+/** Re-exported: redaction is the core's, so an Agent's own stderr passes
+ *  through it before it ever reaches a log or a transcript (ADR-0010). */
+export { redactSecrets };
 
 /**
  * Resolves a Runtime's `secretEnvironment` references into the environment its

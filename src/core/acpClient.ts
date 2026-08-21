@@ -2,6 +2,7 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { isAbsolute } from "node:path";
 import { Readable, Writable } from "node:stream";
 import * as acp from "@agentclientprotocol/sdk";
+import { redactionGuard, redactSecrets } from "./redaction.js";
 import type {
   AgentExit,
   AgentProcess,
@@ -18,6 +19,13 @@ export const CLIENT_NAME = "agent-conductor";
 const STDERR_TAIL_CHARS = 8 * 1024;
 /** Grace a terminated process gets before it is killed outright. */
 const SIGTERM_ESCALATION_MS = 2_000;
+/**
+ * How long the diagnostics pipe may go on delivering after the process is gone.
+ * Bounded for the same reason `TerminalService` bounds it: something the Agent
+ * started can hold the pipe open long after the Agent itself has ended, and
+ * nothing may wait on that indefinitely.
+ */
+const STDERR_DRAIN_MS = 250;
 /** How long a Runtime may take to answer a session-setup request. */
 export const DEFAULT_SETUP_TIMEOUT_MS = 60_000;
 /** Process groups are a POSIX notion; Windows has no equivalent through Node. */
@@ -74,6 +82,17 @@ export const nodeProcessPort: ProcessPort = {
     void exited.then(() => {
       groupEnded = child.pid === undefined || !groupExists(child.pid);
     });
+    // The process ending is not the output ending. `end` on the pipe is what
+    // says the diagnostics are complete; the timer is there because a grandchild
+    // holding the pipe would otherwise keep this pending for as long as it runs.
+    const stderrEnded = new Promise<void>((settle) => {
+      stderr.once("end", () => settle());
+      stderr.once("close", () => settle());
+      void exited.then(() => {
+        const drain = setTimeout(() => settle(), STDERR_DRAIN_MS);
+        drain.unref();
+      });
+    });
 
     return {
       pid: child.pid,
@@ -83,6 +102,7 @@ export const nodeProcessPort: ProcessPort = {
         stderr.on("data", (chunk: string) => handler(chunk));
       },
       exited,
+      stderrEnded,
       kill: (signal) => killGroup(child, signal, groupEnded),
     };
   },
@@ -213,9 +233,47 @@ export async function connectAgent(options: AgentConnectionOptions): Promise<Age
 
   const child = (ports.process ?? nodeProcessPort).spawn(request);
   let stderrTail = "";
+  // An Agent's diagnostics are its own text, and it was started with resolved
+  // secrets in its environment — a crash that prints that environment, or a
+  // verbose flag, puts a credential here. None of it reaches the log, the turn
+  // failure or the chat transcript with a secret still in it (ADR-0010).
+  //
+  // Both buffers are redacted after joining, never chunk by chunk. A value split
+  // across two reads matches neither half, and would be whole again the moment
+  // they were put back together — which is what the tail does, and what two
+  // adjacent records in a log file do to anyone reading them. So the log is
+  // written a whole line at a time out of its own redacted buffer, bounded the
+  // same way, rather than a read at a time.
+  const secretValues = Object.values(options.secretEnvironment ?? {});
+  // The end of the buffer is held back by this much before a line is written,
+  // so that no flush can ever cut a secret in half.
+  const guard = redactionGuard(secretValues);
+  let pendingLine = "";
+  /** Writes whole lines, holding back anything a secret could still straddle. */
+  const writeLines = (upTo: number): void => {
+    const lastBreak = pendingLine.slice(0, upTo).lastIndexOf("\n");
+    if (lastBreak < 0) return;
+    log?.log("debug", `runtime ${runtimeId} stderr: ${pendingLine.slice(0, lastBreak)}`);
+    pendingLine = pendingLine.slice(lastBreak + 1);
+  };
   child.onStderr((chunk) => {
-    stderrTail = (stderrTail + chunk).slice(-STDERR_TAIL_CHARS);
-    log?.log("debug", `runtime ${runtimeId} stderr: ${chunk.trimEnd()}`);
+    stderrTail = redactSecrets((stderrTail + chunk).slice(-STDERR_TAIL_CHARS), secretValues);
+    if (!log) return;
+    pendingLine = redactSecrets((pendingLine + chunk).slice(-STDERR_TAIL_CHARS), secretValues);
+    writeLines(Math.max(0, pendingLine.length - guard));
+  });
+  // A process that died mid-line still said something, and an Agent that writes
+  // one short diagnostic and exits would otherwise never reach the log at all.
+  // Once it is gone its last text is complete, so the guard is no longer needed
+  // and the remainder — redacted as it was appended — is written whole.
+  //
+  // Waits for the pipe rather than the exit: a chunk delivered after the process
+  // is gone is ordinary, and flushing at the exit would hold that last line back
+  // behind the guard for a flush that never came.
+  void child.stderrEnded.then(() => {
+    if (!log || !pendingLine.trim()) return;
+    log.log("debug", `runtime ${runtimeId} stderr: ${pendingLine.trimEnd()}`);
+    pendingLine = "";
   });
 
   const clock = ports.clock ?? systemClock;

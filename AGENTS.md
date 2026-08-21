@@ -76,9 +76,17 @@ make check       # build + lint + test
 make check-all   # the above + the VS Code extension tests against a mock agent
 ```
 
+`make test-integration` downloads VS Code once, into `.vscode-test/`, and runs the extension inside it against the bundled mock Agent. It fails three ways, not one: a test that fails, a suite that registered nothing, and a suite that registered tests and ran fewer — every one skipped, a test with no body, or a `.only` left behind after debugging. The last is the one that will actually happen, and a passing count hides it best.
+
+Launched from inside VS Code it drops the `VSCODE_*`, `ELECTRON_*` and `NODE_OPTIONS` variables it inherited, which would otherwise make the VS Code it starts behave as the outer window's extension host.
+
+The extension exposes the participant to those tests through an object it only builds under `ExtensionMode.Test` — VS Code sets that from the launch arguments, so unlike an environment variable it cannot be forged by anything else in the host. There is no other way in: VS Code has no API for sending a chat participant a turn.
+
 Keep output small: full logs go to `reports/`. For a passing run, report the command, the status, the count and the time. Only read the failing parts.
 
 Never run `vsce publish`. Building the extension file is `make package` / `make package-rich`; publishing it is a human decision.
+
+`.vscodeignore` is an allow-list, and it has to be: `vsce` keeps a file when any negation matches it, whatever else the file says and whatever the order, so `!dist/**` followed by exclusions ships everything under `dist/` regardless. It reports nothing when it is wrong — after changing what the build writes, check what would actually ship with `npx @vscode/vsce ls`.
 
 ## Adding a runtime
 

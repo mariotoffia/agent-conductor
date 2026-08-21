@@ -81,9 +81,30 @@ const badConfigOptions = [
   // schema permits.
 ] as unknown as acp.SessionConfigOption[];
 
+/**
+ * Two models whose display names differ only past the point a client will show.
+ * A client that identifies a choice by its rendered label cannot tell them
+ * apart, and would set the wrong model without anything looking wrong.
+ */
+const COLLIDING_PREFIX = "Very Long Model Name ".repeat(6);
+const collidingConfigOptions: acp.SessionConfigOption[] = [
+  {
+    type: "select",
+    id: "model",
+    name: "Model",
+    category: "model",
+    currentValue: "collide-a",
+    options: [
+      { value: "collide-a", name: `${COLLIDING_PREFIX}A` },
+      { value: "collide-b", name: `${COLLIDING_PREFIX}B` },
+    ],
+  },
+];
+
 function configOptionsFor(agentMode: string): { configOptions?: acp.SessionConfigOption[] } {
   if (agentMode === "no-config-options") return {};
   if (agentMode === "bad-config-options") return { configOptions: badConfigOptions };
+  if (agentMode === "colliding-models") return { configOptions: collidingConfigOptions };
   return { configOptions };
 }
 
@@ -353,6 +374,21 @@ const app = acp
         cost: { amount: 0.01, currency: "USD" },
       },
     });
+    // `full-turn` adds everything else a client has to draw, so one turn can
+    // stand for the whole render map rather than a sample of it.
+    if (mode === "full-turn") {
+      for (const update of [
+        {
+          sessionUpdate: "available_commands_update",
+          availableCommands: [{ name: "compact", description: "Compact the conversation" }],
+        },
+        { sessionUpdate: "current_mode_update", currentModeId: "architect" },
+        { sessionUpdate: "session_info_update", title: "Exercising the client" },
+        { sessionUpdate: "config_option_update", configOptions: refreshedConfigOptions },
+      ] as acp.SessionUpdate[]) {
+        await context.client.notify(acp.methods.client.session.update, { sessionId, update });
+      }
+    }
     return { stopReason: "end_turn" };
   })
   .onRequest(acp.methods.agent.session.setConfigOption, (context) => {
@@ -360,6 +396,16 @@ const app = acp
     // only when the refreshed option still offers it — otherwise the agent's
     // own current value stands, which is what clamping looks like on the wire.
     const { configId, value } = context.params;
+    // `colliding-models` answers with the value it was actually asked for, so a
+    // client that picked by label rather than by identity is visible on the wire.
+    if (mode === "colliding-models") {
+      return {
+        configOptions: collidingConfigOptions.map((option) =>
+          option.id === configId && option.type === "select" && offers(option, value)
+            ? { ...option, currentValue: value }
+            : option),
+      };
+    }
     // `bad-set-response` violates the schema the way a nonconforming agent can:
     // the response type promises an array and no array arrives.
     if (mode === "bad-set-response") return {} as acp.SetSessionConfigOptionResponse;
@@ -402,6 +448,27 @@ if (mode === "spawns-child") {
 if (mode === "stderr") {
   process.stderr.write("mock-agent stderr\n");
 }
+// `leak-secret` behaves like a CLI that dumps its environment when it fails:
+// the resolved credential it was started with goes straight to its diagnostics.
+if (mode === "leak-secret") {
+  process.stderr.write(`fatal: request failed with MOCK_SECRET=${process.env.MOCK_SECRET}\n`);
+  process.exit(9);
+}
+/**
+ * `leak-secret-split` writes the same thing, but with the credential straddling
+ * two reads — which is all a long stack trace or an environment dump does when
+ * it crosses the pipe's buffer. A client that redacts a chunk at a time finds
+ * nothing to remove in either half, and puts the value back together itself.
+ */
+function leakSecretSplit(): void {
+  const secret = process.env.MOCK_SECRET ?? "";
+  const at = Math.floor(secret.length / 2);
+  process.stderr.write(`fatal: request failed with MOCK_SECRET=${secret.slice(0, at)}`);
+  setTimeout(() => {
+    process.stderr.write(`${secret.slice(at)}\ngiving up\n`);
+    setTimeout(() => process.exit(9), 20);
+  }, 20);
+}
 if (process.argv.includes("--ignore-sigterm")) {
   // Survives SIGTERM so clients have to escalate to end it.
   process.on("SIGTERM", () => undefined);
@@ -414,6 +481,11 @@ if (mode === "malformed") {
   process.stdout.end("{malformed\n", () => process.exit(2));
 } else if (mode === "exit") {
   setImmediate(() => process.exit(23));
+} else if (mode === "leak-secret-split") {
+  // Never connects: the diagnostics and the exit are the whole scenario. What
+  // kind of credential is being straddled — one line or several — is decided by
+  // the value the client configured, not by this mode.
+  leakSecretSplit();
 } else {
   app.connect(stream);
 }

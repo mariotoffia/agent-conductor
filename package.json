@@ -5,14 +5,27 @@
   "version": "0.0.1",
   "publisher": "mariotoffia",
   "license": "Apache-2.0",
-  "repository": { "type": "git", "url": "https://github.com/mariotoffia/agent-conductor" },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/mariotoffia/agent-conductor"
+  },
   "type": "module",
-  "engines": { "vscode": "^1.104.0" },
-  "categories": ["AI", "Chat"],
+  "engines": {
+    "vscode": "^1.104.0"
+  },
+  "categories": [
+    "AI",
+    "Chat"
+  ],
   "main": "./dist/extension.cjs",
-  "activationEvents": ["onStartupFinished"],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
   "capabilities": {
-    "untrustedWorkspaces": { "supported": false, "description": "Agents execute code; workspace trust is required." },
+    "untrustedWorkspaces": {
+      "supported": false,
+      "description": "Agents execute code; workspace trust is required."
+    },
     "virtualWorkspaces": false
   },
   "contributes": {
@@ -24,28 +37,70 @@
         "description": "Drive Claude Code, Codex, Gemini, Copilot & any ACP agent",
         "isSticky": true,
         "commands": [
-          { "name": "runtime", "description": "Switch CLI runtime for this session" },
-          { "name": "model", "description": "Pick model" },
-          { "name": "effort", "description": "Pick reasoning effort" },
-          { "name": "spawn", "description": "Manually spawn a subagent" },
-          { "name": "cancel", "description": "Cancel the current turn" }
+          {
+            "name": "runtime",
+            "description": "Switch CLI runtime for this session"
+          },
+          {
+            "name": "model",
+            "description": "Pick model"
+          },
+          {
+            "name": "effort",
+            "description": "Pick reasoning effort"
+          },
+          {
+            "name": "cancel",
+            "description": "Cancel the current turn"
+          }
         ]
       }
     ],
     "commands": [
-      { "command": "agentConductor.connectCli", "title": "Agent Conductor: Connect a CLI…" },
-      { "command": "agentConductor.newSession", "title": "Agent Conductor: New Session", "icon": "$(add)" },
-      { "command": "agentConductor.cancelAll", "title": "Agent Conductor: Cancel All Sessions" },
-      { "command": "agentConductor.refreshRegistry", "title": "Agent Conductor: Refresh ACP Agent Registry" }
+      {
+        "command": "agentConductor.connectCli",
+        "title": "Agent Conductor: Connect a CLI…"
+      },
+      {
+        "command": "agentConductor.newSession",
+        "title": "Agent Conductor: New Session",
+        "icon": "$(add)"
+      },
+      {
+        "command": "agentConductor.cancelAll",
+        "title": "Agent Conductor: Cancel All Sessions"
+      },
+      {
+        "command": "agentConductor.refreshRegistry",
+        "title": "Agent Conductor: Refresh ACP Agent Registry"
+      }
     ],
     "viewsContainers": {
-      "activitybar": [{ "id": "agentConductor", "title": "Agent Conductor", "icon": "media/icon.svg" }]
+      "activitybar": [
+        {
+          "id": "agentConductor",
+          "title": "Agent Conductor",
+          "icon": "media/icon.svg"
+        }
+      ]
     },
     "views": {
-      "agentConductor": [{ "id": "agentConductor.sessions", "name": "Sessions", "icon": "media/icon.svg" }]
+      "agentConductor": [
+        {
+          "id": "agentConductor.sessions",
+          "name": "Sessions",
+          "icon": "media/icon.svg"
+        }
+      ]
     },
     "menus": {
-      "view/title": [{ "command": "agentConductor.newSession", "when": "view == agentConductor.sessions", "group": "navigation" }]
+      "view/title": [
+        {
+          "command": "agentConductor.newSession",
+          "when": "view == agentConductor.sessions",
+          "group": "navigation"
+        }
+      ]
     },
     "walkthroughs": [
       {
@@ -57,26 +112,36 @@
             "id": "install",
             "title": "Install at least one agent CLI",
             "description": "Claude Code, Codex, Gemini CLI or Copilot CLI.\n[Check what's installed](command:agentConductor.connectCli)",
-            "media": { "markdown": "walkthrough/install.md" }
+            "media": {
+              "markdown": "walkthrough/install.md"
+            }
           },
           {
             "id": "connect",
             "title": "Run the connection wizard",
             "description": "[Connect a CLI…](command:agentConductor.connectCli)",
-            "media": { "markdown": "walkthrough/connect.md" },
-            "completionEvents": ["onSettingChanged:agentConductor.runtimes"]
+            "media": {
+              "markdown": "walkthrough/connect.md"
+            },
+            "completionEvents": [
+              "onSettingChanged:agentConductor.runtimes"
+            ]
           },
           {
             "id": "firstChat",
             "title": "Start a session",
             "description": "Open Chat and mention **@conductor**.",
-            "media": { "markdown": "walkthrough/chat.md" }
+            "media": {
+              "markdown": "walkthrough/chat.md"
+            }
           },
           {
             "id": "orchestrate",
             "title": "Enable cross-CLI subagents",
             "description": "[Review orchestration settings](command:workbench.action.openSettings?%22agentConductor.orchestration%22)",
-            "media": { "markdown": "walkthrough/orchestrate.md" }
+            "media": {
+              "markdown": "walkthrough/orchestrate.md"
+            }
           }
         ]
       }
@@ -92,30 +157,65 @@
           "additionalProperties": {
             "type": "object",
             "properties": {
-              "enabled": { "type": "boolean", "default": true },
-              "command": { "type": "string" },
-              "args": { "type": "array", "items": { "type": "string" } },
+              "enabled": {
+                "type": "boolean",
+                "default": true
+              },
+              "command": {
+                "type": "string"
+              },
+              "args": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
               "suppression": {
                 "type": "object",
                 "additionalProperties": false,
-                "required": ["delegationTools"],
+                "required": [
+                  "delegationTools"
+                ],
                 "markdownDescription": "Suppression plan for a runtime the catalog has no recipe for. Until one is supplied and verified, the runtime cannot host cross-CLI subagents.",
                 "properties": {
-                  "args": { "type": "array", "items": { "type": "string" } },
-                  "env": { "type": "object", "additionalProperties": { "type": "string" } },
-                  "sessionMeta": { "type": "object", "description": "Sent as session/new _meta." },
+                  "args": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "env": {
+                    "type": "object",
+                    "additionalProperties": {
+                      "type": "string"
+                    }
+                  },
+                  "sessionMeta": {
+                    "type": "object",
+                    "description": "Sent as session/new _meta."
+                  },
                   "workspaceSettings": {
                     "type": "object",
                     "additionalProperties": false,
-                    "required": ["file", "merge"],
+                    "required": [
+                      "file",
+                      "merge"
+                    ],
                     "properties": {
-                      "file": { "type": "string", "description": "Workspace-relative settings file to merge into." },
-                      "merge": { "type": "object" }
+                      "file": {
+                        "type": "string",
+                        "description": "Workspace-relative settings file to merge into."
+                      },
+                      "merge": {
+                        "type": "object"
+                      }
                     }
                   },
                   "delegationTools": {
                     "type": "array",
-                    "items": { "type": "string" },
+                    "items": {
+                      "type": "string"
+                    },
                     "minItems": 1,
                     "description": "Tools the plan disables; their absence from the agent's live tool list is what verifies it."
                   }
@@ -123,18 +223,40 @@
               },
               "secretEnvironment": {
                 "type": "object",
-                "additionalProperties": { "type": "string" },
+                "additionalProperties": {
+                  "type": "string"
+                },
                 "description": "Environment variable name to VS Code SecretStorage key reference."
               },
-              "defaultModel": { "type": "string" },
-              "defaultEffort": { "type": "string", "enum": ["low", "medium", "high", "xhigh", "max"] },
-              "suppressBuiltInSubagents": { "type": "boolean", "default": true },
-              "safeMode": { "type": "boolean", "default": false }
+              "defaultModel": {
+                "type": "string"
+              },
+              "defaultEffort": {
+                "type": "string",
+                "enum": [
+                  "low",
+                  "medium",
+                  "high",
+                  "xhigh",
+                  "max"
+                ]
+              },
+              "suppressBuiltInSubagents": {
+                "type": "boolean",
+                "default": true
+              },
+              "safeMode": {
+                "type": "boolean",
+                "default": false
+              }
             },
             "additionalProperties": false
           }
         },
-        "agentConductor.defaultRuntime": { "type": "string", "default": "claude" },
+        "agentConductor.defaultRuntime": {
+          "type": "string",
+          "default": "claude"
+        },
         "agentConductor.presets": {
           "type": "object",
           "scope": "resource",
@@ -143,34 +265,86 @@
           "additionalProperties": {
             "type": "object",
             "properties": {
-              "runtime": { "type": "string" },
-              "model": { "type": "string" },
-              "effort": { "type": "string" }
+              "runtime": {
+                "type": "string"
+              },
+              "model": {
+                "type": "string"
+              },
+              "effort": {
+                "type": "string"
+              }
             }
           }
         },
-        "agentConductor.orchestration.enabled": { "type": "boolean", "default": false },
-        "agentConductor.orchestration.maxConcurrentSubagents": { "type": "number", "default": 3, "minimum": 1, "maximum": 16 },
+        "agentConductor.orchestration.enabled": {
+          "type": "boolean",
+          "default": false
+        },
+        "agentConductor.orchestration.maxConcurrentSubagents": {
+          "type": "number",
+          "default": 3,
+          "minimum": 1,
+          "maximum": 16
+        },
         "agentConductor.orchestration.maxSpawnDepth": {
           "type": "number",
           "default": 1,
           "description": "Depth below which the orchestrator MCP server is not injected (recursion guard)."
         },
-        "agentConductor.orchestration.subagentIsolation": { "type": "string", "enum": ["shared", "worktree"], "default": "worktree" },
-        "agentConductor.orchestration.budgetUsdPerSubagent": { "type": "number", "default": 2 },
-        "agentConductor.orchestration.defaultSubagentPreset": { "type": "string", "default": "" },
+        "agentConductor.orchestration.subagentIsolation": {
+          "type": "string",
+          "enum": [
+            "shared",
+            "worktree"
+          ],
+          "default": "worktree"
+        },
+        "agentConductor.orchestration.budgetUsdPerSubagent": {
+          "type": "number",
+          "default": 2
+        },
+        "agentConductor.orchestration.defaultSubagentPreset": {
+          "type": "string",
+          "default": ""
+        },
         "agentConductor.permissions.autoAllowClientOperations": {
           "type": "array",
-          "items": { "type": "string", "enum": ["fs.read", "fs.write", "terminal.spawn", "terminal.wait", "terminal.kill", "terminal.release"] },
-          "default": ["fs.read"],
-          "description": "Client operations approved without prompting; ACP ToolKind is display-only. Waiting for, killing and releasing a command are never prompted for \u2014 consent is given when the command starts \u2014 so naming them here has no effect, while naming them under auto-reject does."
+          "items": {
+            "type": "string",
+            "enum": [
+              "fs.read",
+              "fs.write",
+              "terminal.spawn",
+              "terminal.wait",
+              "terminal.kill",
+              "terminal.release"
+            ]
+          },
+          "default": [
+            "fs.read"
+          ],
+          "description": "Client operations approved without prompting; ACP ToolKind is display-only. Waiting for, killing and releasing a command are never prompted for — consent is given when the command starts — so naming them here has no effect, while naming them under auto-reject does."
         },
         "agentConductor.permissions.autoRejectClientOperations": {
           "type": "array",
-          "items": { "type": "string", "enum": ["fs.read", "fs.write", "terminal.spawn", "terminal.wait", "terminal.kill", "terminal.release"] },
+          "items": {
+            "type": "string",
+            "enum": [
+              "fs.read",
+              "fs.write",
+              "terminal.spawn",
+              "terminal.wait",
+              "terminal.kill",
+              "terminal.release"
+            ]
+          },
           "default": []
         },
-        "agentConductor.permissions.rememberAlwaysChoices": { "type": "boolean", "default": true },
+        "agentConductor.permissions.rememberAlwaysChoices": {
+          "type": "boolean",
+          "default": true
+        },
         "agentConductor.permissions.maxEnvironmentChars": {
           "type": "number",
           "default": 900,
@@ -188,18 +362,57 @@
           "default": false,
           "description": "Allow merging subagent-suppression keys into the workspace .gemini/settings.json (asked once by the wizard)."
         },
-        "agentConductor.registry.autoResolve": { "type": "boolean", "default": true },
-        "agentConductor.registry.url": { "type": "string", "default": "https://cdn.agentclientprotocol.com/registry/v1/latest/registry.json" },
-        "agentConductor.registry.pin": { "type": "object", "default": {}, "additionalProperties": { "type": "string" } },
-        "agentConductor.sessions.resumeOnStartup": { "type": "boolean", "default": false },
-        "agentConductor.worktrees.root": { "type": "string", "default": "" },
-        "agentConductor.ui.showThinking": { "type": "boolean", "default": true },
+        "agentConductor.registry.autoResolve": {
+          "type": "boolean",
+          "default": true
+        },
+        "agentConductor.registry.url": {
+          "type": "string",
+          "default": "https://cdn.agentclientprotocol.com/registry/v1/latest/registry.json"
+        },
+        "agentConductor.registry.pin": {
+          "type": "object",
+          "default": {},
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "agentConductor.sessions.resumeOnStartup": {
+          "type": "boolean",
+          "default": false
+        },
+        "agentConductor.worktrees.root": {
+          "type": "string",
+          "default": ""
+        },
+        "agentConductor.ui.showThinking": {
+          "type": "boolean",
+          "default": true
+        },
         "agentConductor.ui.slashCommandAllowlist": {
           "type": "array",
-          "items": { "type": "string" },
-          "default": ["compact", "init", "review", "plan", "context"]
+          "items": {
+            "type": "string"
+          },
+          "default": [
+            "compact",
+            "init",
+            "review",
+            "plan",
+            "context"
+          ]
         },
-        "agentConductor.logging.level": { "type": "string", "enum": ["off", "error", "info", "debug", "trace"], "default": "info" }
+        "agentConductor.logging.level": {
+          "type": "string",
+          "enum": [
+            "off",
+            "error",
+            "info",
+            "debug",
+            "trace"
+          ],
+          "default": "info"
+        }
       }
     }
   },
@@ -209,7 +422,7 @@
     "lint": "eslint src --max-warnings 0",
     "typecheck": "tsc --noEmit",
     "test": "node --import tsx --import ./src/test/leak-guard.ts --test \"src/test/unit/**/*.test.ts\"",
-    "test:integration": "echo 'integration: extension-host harness not implemented yet' && exit 0"
+    "test:integration": "node --import tsx src/test/integration/runTests.ts"
   },
   "dependencies": {
     "@agentclientprotocol/sdk": "^1.3.0",
@@ -217,10 +430,14 @@
     "zod": "^3.23.8"
   },
   "devDependencies": {
+    "@types/mocha": "^10.0.10",
     "@types/node": "^22.0.0",
     "@types/vscode": "^1.104.0",
+    "@vscode/test-electron": "^3.1.0",
     "esbuild": "^0.25.0",
     "eslint": "^9.0.0",
+    "glob": "^11.1.0",
+    "mocha": "^11.8.0",
     "tsx": "^4.19.0",
     "typescript": "^5.6.0",
     "typescript-eslint": "^8.8.0"

@@ -248,12 +248,13 @@ interface EffectiveSelection {
 
 **Files:** Create `src/vscode/participant.ts`, `diffDocs.ts`, `composition.ts`; modify `src/extension.ts`, `package.json`; create integration tests.
 
-- [ ] Gate every spawn on `vscode.workspace.isTrusted` and a configured trusted Runtime.
-- [ ] Dispatch `/runtime`, `/model`, `/effort`, `/cancel`, and ordinary prompts; remove the bootstrap response.
-- [ ] Map every documented Update to a stable render model, including messages, thoughts, tool calls/updates, diffs, plans, available commands, usage, and Session info.
-- [ ] Register `agentConductor.openDiff` and a virtual document provider; keep old text bounded and dispose it with the Session.
-- [ ] Wire cancellation tokens to Session cancel and return the ACP cancelled outcome.
-- [ ] Run the extension-host test for one mock Session end to end; expect streamed content, permission behavior, Read-back, diff command, and clean teardown. Commit: `feat: run direct ACP sessions in chat`.
+- [x] Gate every spawn on `vscode.workspace.isTrusted` and a configured trusted Runtime.
+- [x] Dispatch `/runtime`, `/model`, `/effort`, `/cancel`, and ordinary prompts; remove the bootstrap response.
+- [x] Map every documented Update to a stable render model, including messages, thoughts, tool calls/updates, diffs, plans, available commands, usage, and Session info.
+- [x] Register `agentConductor.openDiff` and a virtual document provider; keep old text bounded and dispose it with the Session.
+- [x] Wire cancellation tokens to Session cancel and return the ACP cancelled outcome.
+- [x] Run the extension-host test for one mock Session end to end; expect streamed content, permission behavior, Read-back, diff command, and clean teardown. Commit: `feat: run direct ACP sessions in chat`.
+  - `make test-integration` runs VS Code with this extension loaded and drives one Session against the bundled mock Agent. Task 14 still owns the rest of its own list: the wider coverage (wizard save, resume, sessions tree, Shim child), the `engines.node` range and `doctor` enforcing it, and printing only counts and failures instead of the full log.
 
 ### Task 9: Implement the Connect-a-CLI wizard
 

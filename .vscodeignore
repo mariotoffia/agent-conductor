@@ -1,5 +1,14 @@
 **
-!dist/**
+# An allow-list, not exclusions. `vsce` keeps a file when any negation matches,
+# whatever else says otherwise and whatever the order — so `!dist/**` followed
+# by exclusions ships everything under `dist/` anyway. Only what runs in a user's
+# window is named here; the mock agent and the extension-host suite are built
+# into `dist/` too and neither is reachable from `main`.
+# This file gives no feedback when it is wrong: check with `npx @vscode/vsce ls`.
+!dist/extension.cjs
+!dist/extension.cjs.map
+!dist/mcp-shim.cjs
+!dist/mcp-shim.cjs.map
 !media/**
 !walkthrough/**
 !package.json
