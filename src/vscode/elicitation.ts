@@ -1,6 +1,7 @@
 import type * as acp from "@agentclientprotocol/sdk";
 import { CreateElicitationRequest, ElicitationPropertySchema } from "@agentclientprotocol/sdk";
 import type * as vscode from "vscode";
+import type { ConfigChoice } from "../core/index.js";
 import type { ElicitationPort } from "../core/index.js";
 import {
   clampForDisplay,
@@ -21,10 +22,25 @@ export interface QuickItem {
   description?: string;
 }
 
+/** One Config Option value as a picker item. Shared with the connection wizard
+ *  so a choice is labelled — and clamped — the same wherever it is offered. */
+export function asQuickItem(choice: ConfigChoice): QuickItem {
+  return {
+    label: clampForDisplay(choice.group ? `${choice.group} · ${choice.label}` : choice.label, MAX_LABEL_CHARS),
+    description: choice.value,
+  };
+}
+
 export interface FormInputOptions {
   title: string;
   prompt: string;
   value?: string;
+  /** Hides what is typed. Set only where the answer is a credential; an Agent's
+   *  own elicitation never asks for one through this Client (ADR-0010). */
+  password?: boolean;
+  /** Keeps the box open when the window loses focus. The connection wizard asks
+   *  for paths and credentials, which people leave the window to fetch. */
+  ignoreFocusOut?: boolean;
   /** Returns a complaint to keep the box open, or `undefined` to accept. */
   validateInput?: (value: string) => string | undefined;
 }
@@ -32,6 +48,8 @@ export interface FormInputOptions {
 export interface FormPickOptions {
   title: string;
   placeHolder: string;
+  /** Keeps the picker open when the window loses focus. */
+  ignoreFocusOut?: boolean;
 }
 
 /** `canPickMany` is part of the shape because it is what makes the answer a

@@ -29,6 +29,13 @@ export interface RuntimeQuirks {
 
 export interface SessionPolicy {
   suppressBuiltInSubagents: boolean;
+  /**
+   * Claude runs on an API key rather than somebody's claude.ai subscription
+   * (ADR-0010). Carried only by Runtimes the catalog has a recipe for, so a
+   * setting that names none of theirs does not lapse everyone else's trust —
+   * the policy is folded into the fingerprint whole.
+   */
+  hideSubscriptionAuth?: boolean;
 }
 
 /**
@@ -49,9 +56,18 @@ export interface RuntimeSpec {
   id: string;
   displayName: string;
   launch: LaunchSpec;
+  /**
+   * The launch arguments this Runtime has before any policy is applied.
+   *
+   * What the connection wizard offers as a prefill, and what a replaced launch
+   * is judged against: offering the policy-augmented arguments back would hand
+   * this Client's own flags to the user as theirs, and accepting them would
+   * count as replacing the launch — which costs the Runtime its Suppression
+   * Plan and its Adapter.
+   */
+  baseArgs?: string[];
   /** Command the wizard opens in a terminal when the agent reports auth is required. */
   loginCommand?: string;
-  detection: { binaries: string[]; versionArgs: string[] };
   /** Effective per-session policy this entry was built with. Part of the launch
    *  identity: suppression rides in argv, env, and `_meta`, so a Runtime that
    *  suppresses nothing is not the Runtime the user approved (ADR-0008). */
@@ -64,6 +80,19 @@ export interface RuntimeSpec {
   registryId?: string;
   /** Adapter package behind `launch.command`; absent for a native ACP CLI. */
   adapter?: AdapterPackage;
+  /** Arguments that switch this Runtime off subscription credentials, where it
+   *  has such a switch. Applied when the policy asks for it, which puts them in
+   *  the launch the user approves (ADR-0010). */
+  subscriptionAuth?: { hideArgs: string[] };
+  /**
+   * Environment variable name to SecretStorage key, from settings. Names only —
+   * a value never appears here or in anything derived from it (ADR-0010).
+   *
+   * Part of the Runtime because it decides what the process is started with: a
+   * variable added here rides the approval the user already gave unless the
+   * fingerprint covers it, and a workspace can write it (ADR-0007).
+   */
+  secretEnvironment?: Record<string, string>;
   /** User-defined Runtime: no built-in Suppression Plan, and no orchestration
    *  until the user supplies one and its effect is verified (ADR-0008). */
   custom?: boolean;
@@ -101,6 +130,15 @@ export interface RuntimeTrust {
   };
   /** Agent-enforced monetary child limits verified for this fingerprint. */
   budget?: boolean;
+  /**
+   * The user agreed that this Runtime may be handed work by an agent on another
+   * provider (ADR-0009).
+   *
+   * Kept here rather than in settings so it lapses with the trust that carries
+   * it: a Runtime whose command changed is one nobody agreed to send anything
+   * to. Absence means direct Sessions only, which is also the default.
+   */
+  fanOut?: boolean;
 }
 
 /** What a Runtime may take part in, once its trust fingerprint still matches. */
@@ -135,6 +173,13 @@ export interface ResolvedRuntime {
    *  function, so no caller can apply a policy other than the approved one. */
   sessionMeta?: Record<string, unknown>;
   custom: boolean;
+  /** Variables filled from SecretStorage, name to key. Carried because the
+   *  fingerprint covers it: everything hashed has to be showable. */
+  secretEnvironment?: Record<string, string>;
+  /** The arguments that would switch this Runtime off subscription credentials,
+   *  where it has such a switch. Carried so what is approved can be described by
+   *  what the launch actually says rather than by what was intended. */
+  subscriptionAuth?: { hideArgs: string[] };
   /** Identity the user approves once and the Client re-verifies before every spawn. */
   fingerprint: string;
   trusted: boolean;
@@ -151,6 +196,15 @@ export interface ResolvedRuntime {
 // run under plain Node in tests and under VS Code in production. Each port maps
 // to one ACP surface; a missing port means that capability is not advertised.
 // ---------------------------------------------------------------------------
+
+/** Lifecycle of one Session. A Session never leaves `disposed` or `failed`. */
+export type SessionState =
+  | "idle"
+  | "configuring"
+  | "prompting"
+  | "cancelling"
+  | "failed"
+  | "disposed";
 
 /** Severity of a log record. The `off` logging setting drops the record. */
 export type LogLevel = "error" | "info" | "debug" | "trace";
@@ -197,6 +251,16 @@ export interface AgentExit {
   error?: Error;
 }
 
+/**
+ * How a process's stderr stopped.
+ *
+ * `closed` means the pipe itself ended, so what was said is complete. `drained`
+ * means the process is gone and the pipe has not — something it started is still
+ * holding the descriptor, and more may yet arrive. A reader that treats the
+ * second as the first will cut a value in half across two log records.
+ */
+export type StderrEnd = "closed" | "drained";
+
 export interface AgentProcess {
   readonly pid?: number;
   readonly stdin: WritableStream<Uint8Array>;
@@ -211,7 +275,7 @@ export interface AgentProcess {
    * the pipe can still deliver after the exit. A host that cannot tell must
    * settle this anyway, bounded, so nothing waits on it forever.
    */
-  readonly stderrEnded: Promise<void>;
+  readonly stderrEnded: Promise<StderrEnd>;
   kill(signal: "SIGTERM" | "SIGKILL"): void;
 }
 
@@ -264,6 +328,15 @@ export interface TerminalPort {
   waitForTerminalExit(request: acp.WaitForTerminalExitRequest): Promise<acp.WaitForTerminalExitResponse>;
   killTerminal(request: acp.KillTerminalRequest): Promise<void>;
   releaseTerminal(request: acp.ReleaseTerminalRequest): Promise<void>;
+  /**
+   * Ends everything this Session's Agent still has running.
+   *
+   * Part of the port because the guarantee is the Session's: commands are
+   * spawned in their own process group so that ending a Session ends what it
+   * started, and nothing else knows when that is (ADR-0008). A host whose
+   * terminals cannot outlive a Session need not implement it.
+   */
+  dispose?(): void | Promise<void>;
 }
 
 export interface ElicitationPort {

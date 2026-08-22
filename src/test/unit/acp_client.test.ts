@@ -1,11 +1,13 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { resolve } from "node:path";
 import { test, type TestContext } from "node:test";
 import * as acp from "@agentclientprotocol/sdk";
 import {
+  appendRedacted,
+  STDERR_TAIL_CHARS,
   ConductorSession,
   nodeProcessPort,
   type AgentProcess,
@@ -29,7 +31,7 @@ function deadOnArrivalPort(): ProcessPort {
       stdout: new ReadableStream<Uint8Array>(), // never delivers, never ends
       onStderr: () => undefined,
       exited: Promise.resolve({ code: 7, signal: null }),
-      stderrEnded: Promise.resolve(),
+      stderrEnded: Promise.resolve("closed" as const),
       kill: () => undefined,
     }),
   };
@@ -366,7 +368,9 @@ acpTest("an Agent that dies during session/new reports the stage and its exit st
 });
 
 test("closing a session stops the helper processes the agent started", { skip: process.platform === "win32", timeout: 20_000 }, async (t) => {
-  const log = join(await mkdtemp(join(tmpdir(), "conductor-agent-")), "worker.log");
+  const home = await mkdtemp(join(tmpdir(), "conductor-agent-"));
+  t.after(() => rm(home, { recursive: true, force: true }));
+  const log = join(home, "worker.log");
   const h = harness(t);
   const session = await h.open({
     launch: { ...launchMockAgent("spawns-child"), env: { MOCK_AGENT_WORKER_LOG: log } },
@@ -437,4 +441,29 @@ test("a refused handshake keeps its reason even when the teardown itself fails",
   // The handshake is what failed; a teardown that fails on the way out must not
   // replace the diagnosis with its own.
   await assert.rejects(h.open({ launch: launchMockAgent("bad-protocol") }), /protocol version/);
+});
+
+test("a secret straddling the tail's cut is not left half-shown", () => {
+  const secret = `sk-ant-api03-${"A".repeat(28)}`;
+  // Sized so the buffer's cut lands *inside* the secret once the two halves
+  // meet: cutting before redacting then removes its head, and what is left
+  // matches nothing on every later pass — so it rides along in every failure
+  // message that quotes the tail (ADR-0010).
+  const head = 20;
+  const first = "n".repeat(STDERR_TAIL_CHARS - head) + secret.slice(0, head);
+  const second = secret.slice(head) + "m".repeat(STDERR_TAIL_CHARS - head - 2);
+
+  const tail = [first, second].reduce(
+    (buffer, chunk) => appendRedacted(buffer, chunk, [secret], STDERR_TAIL_CHARS),
+    "",
+  );
+
+  assert.ok(tail.length <= STDERR_TAIL_CHARS, "the tail stays bounded");
+  for (let cut = 8; cut < secret.length; cut += 1) {
+    assert.equal(
+      tail.includes(secret.slice(cut)),
+      false,
+      `a ${secret.length - cut}-character suffix of the secret survived`,
+    );
+  }
 });

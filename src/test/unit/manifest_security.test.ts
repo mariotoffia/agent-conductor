@@ -7,6 +7,8 @@ interface JsonSchema {
   type?: string;
   default?: unknown;
   description?: string;
+  markdownDescription?: string;
+  scope?: string;
   items?: JsonSchema;
   enum?: string[];
   minimum?: number;
@@ -34,12 +36,17 @@ test("cross-runtime orchestration requires explicit opt-in", () => {
 });
 
 test("Claude sessions default to API-key authentication", () => {
-  assert.deepEqual(settings["agentConductor.claude.hideSubscriptionAuth"], {
-    type: "boolean",
-    default: true,
-    markdownDescription:
-      "Pass `--hide-claude-auth` to disable claude.ai subscription credentials; configure API-key or supported cloud-provider authentication for Agent Conductor.",
-  });
+  const setting = settings["agentConductor.claude.hideSubscriptionAuth"];
+
+  assert.equal(setting.type, "boolean");
+  // Whether a personal plan may be routed through a third-party product is not
+  // a repository's to decide, whichever way this one is set (ADR-0010).
+  assert.equal(setting.scope, "machine");
+  assert.equal(setting.default, true, "ADR-0010's posture is the default");
+  // The description names the flag, and `subscription_auth.test.ts` pins that
+  // the flag actually reaches the launch. A manifest describing a security
+  // property the client does not have is the failure worth guarding against.
+  assert.match(setting.markdownDescription ?? "", /--hide-claude-auth/);
 });
 
 test("runtime settings reference secrets without accepting plaintext environment values", () => {
@@ -63,12 +70,14 @@ test("automatic permission policy uses Client-derived operation keys", () => {
   const operationKeys = ["fs.read", "fs.write", "terminal.spawn", "terminal.wait", "terminal.kill", "terminal.release"];
   assert.deepEqual(settings["agentConductor.permissions.autoAllowClientOperations"], {
     type: "array",
+    scope: "machine",
     items: { type: "string", enum: operationKeys },
     default: ["fs.read"],
     description: "Client operations approved without prompting; ACP ToolKind is display-only. Waiting for, killing and releasing a command are never prompted for \u2014 consent is given when the command starts \u2014 so naming them here has no effect, while naming them under auto-reject does.",
   });
   assert.deepEqual(settings["agentConductor.permissions.autoRejectClientOperations"], {
     type: "array",
+    scope: "machine",
     items: { type: "string", enum: operationKeys },
     default: [],
   });
@@ -95,4 +104,63 @@ test("the approval prompt's environment budget cannot be raised past what it sho
   assert.equal(budget.maximum, MAX_ENV_CHARS);
   assert.equal(budget.default, DEFAULT_ENV_CHARS);
   assert.equal(budget.minimum, 0);
+});
+
+test("settings that govern the window are declared as governing the window", () => {
+  // `resource` scope makes VS Code offer a per-folder tab for these, and a
+  // folder value would be silently ignored: the participant is one per window,
+  // reads settings without a resource, and runs one session at a time. A
+  // repository can still supply them through workspace settings, which is the
+  // case the approval prompt is built for.
+  for (const key of ["agentConductor.runtimes", "agentConductor.presets"]) {
+    assert.equal(settings[key]?.scope, "window", `${key} offers a folder tab nothing reads`);
+  }
+});
+
+test("whether the user is asked at all is not a repository's to decide", () => {
+  // A workspace can write window-scoped settings, and these three decide
+  // whether a permission is ever put in front of anybody. A cloned repository
+  // that could set them would remove the only defence there is (ADR-0007).
+  for (const key of [
+    "agentConductor.permissions.autoAllowClientOperations",
+    "agentConductor.permissions.autoRejectClientOperations",
+    "agentConductor.permissions.rememberAlwaysChoices",
+  ]) {
+    assert.equal(settings[key]?.scope, "machine", `${key} is settable by a workspace`);
+  }
+});
+
+test("the client's own limits are not a repository's to set", () => {
+  // ADR-0008 puts orchestration behind the user turning it on, and ADR-0009
+  // makes depth, concurrency and budget the Client's limits. A repository that
+  // could write them could also flip the window policy, which changes every
+  // Runtime's fingerprint and leaves every approval lapsed.
+  for (const key of [
+    "agentConductor.orchestration.enabled",
+    "agentConductor.orchestration.maxSpawnDepth",
+    "agentConductor.orchestration.maxConcurrentSubagents",
+    "agentConductor.orchestration.budgetUsdPerSubagent",
+    "agentConductor.orchestration.subagentIsolation",
+    "agentConductor.orchestration.defaultSubagentPreset",
+    "agentConductor.worktrees.root",
+    "agentConductor.gemini.writeWorkspaceSettings",
+  ]) {
+    assert.equal(settings[key]?.scope, "machine", `${key} is settable by a workspace`);
+  }
+});
+
+test("what to download and which version to install are not a repository's to say", () => {
+  // A workspace can write window-scoped settings. These two decide where the
+  // extension fetches from and which exact version the wizard offers to install
+  // globally, which is not something a repository gets a say in (ADR-0007).
+  for (const key of ["agentConductor.registry.url", "agentConductor.registry.pin"]) {
+    assert.equal(settings[key]?.scope, "machine", `${key} is settable by a workspace`);
+  }
+});
+
+test("whether opening a folder starts an agent is not the folder's to decide", () => {
+  // Resuming on startup spawns a coding CLI with the user's own permissions
+  // because a window opened. A cloned repository that could turn that on would
+  // be choosing to run something before anybody had looked at it (ADR-0007).
+  assert.equal(settings["agentConductor.sessions.resumeOnStartup"]?.scope, "machine");
 });

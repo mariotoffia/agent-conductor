@@ -1,4 +1,4 @@
-import { mkdtemp } from "node:fs/promises";
+import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -42,6 +42,16 @@ function withoutHostEnvironment(): Record<string, string | undefined> {
 
 async function main(): Promise<void> {
   const workspace = await mkdtemp(join(tmpdir(), "conductor-host-"));
+  // Removed however the run ends: this harness makes one per invocation, and
+  // the unit suite's fixtures were leaking the same way until they were fixed.
+  try {
+    await runInside(workspace);
+  } finally {
+    await rm(workspace, { recursive: true, force: true });
+  }
+}
+
+async function runInside(workspace: string): Promise<void> {
   await runTests({
     extensionDevelopmentPath: root,
     extensionTestsPath: resolve(root, "dist", "test", "suite", "index.cjs"),

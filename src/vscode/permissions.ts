@@ -1,7 +1,7 @@
 import type * as acp from "@agentclientprotocol/sdk";
 import type * as vscode from "vscode";
 import { methods } from "@agentclientprotocol/sdk";
-import type { PermissionPort } from "../core/index.js";
+import { REORDERING, type PermissionPort } from "../core/index.js";
 
 /**
  * Consent routing for everything an Agent asks a human to approve.
@@ -122,7 +122,10 @@ export class PermissionRouter implements PermissionPort, Consent {
   constructor(policy: PermissionPolicy, host: ConsentHost, label = "The agent") {
     this.#policy = policy;
     this.#host = host;
-    this.#label = label;
+    // A custom Runtime's display name is its settings key, so it is as
+    // unbounded and as free-form as anything else settings hold — and it leads
+    // every dialog this router writes.
+    this.#label = oneLine(label, MAX_LABEL_CHARS);
   }
 
   /**
@@ -184,7 +187,9 @@ export class PermissionRouter implements PermissionPort, Consent {
     }
 
     const answer = await this.#host.ask(
-      clampForDisplay(request.toolCall.title ?? `${this.#label} requests permission`, MAX_LABEL_CHARS),
+      // The Agent's own words, said to be the Agent's. Its title is the whole
+      // headline otherwise, and a headline can be written to read as ours.
+      `${this.#label} asks: ${oneLine(request.toolCall.title ?? "to do something it did not describe", MAX_LABEL_CHARS)}`,
       { modal: true, detail: describeToolCall(request.toolCall) },
       ...byLabel.keys(),
     );
@@ -195,18 +200,45 @@ export class PermissionRouter implements PermissionPort, Consent {
   }
 }
 
-/** What the Agent says it is about to do, marked as its own account of it. */
+/**
+ * What the Agent says it is about to do, marked as its own account of it.
+ *
+ * Every part is bounded on its own and printed on one line, as a command's
+ * environment is: a long first path must not be how the second one goes unread,
+ * and no part may write a line this Client did not (ARCHITECTURE §Client
+ * services).
+ */
 function describeToolCall(toolCall: acp.ToolCallUpdate): string {
   const lines: string[] = [];
-  if (toolCall.kind) lines.push(`Tool kind: ${toolCall.kind} (reported by the agent)`);
-  const locations = (toolCall.locations ?? []).map((location) => location.path);
-  if (locations.length > 0) lines.push(locations.join("\n"));
+  if (toolCall.kind) lines.push(`Tool kind: ${oneLine(toolCall.kind, MAX_LABEL_CHARS)} (reported by the agent)`);
+  const all = toolCall.locations ?? [];
+  const shown = all.slice(0, MAX_LOCATIONS).map((location) => oneLine(location.path, MAX_PATH_CHARS));
+  if (shown.length > 0) {
+    // The count is said when not all of them are: an agent choosing how many to
+    // send must not thereby choose how many go unmentioned.
+    lines.push(
+      all.length > shown.length
+        ? `${shown.join("\n")}\n…and ${all.length - shown.length} more the agent listed`
+        : shown.join("\n"),
+    );
+  }
   return clampForDisplay(lines.join("\n\n") || "The agent did not describe this action.", MAX_DETAIL_CHARS);
 }
 
+/** Enough of a path to recognise it, bounded so that a list of them stays a
+ *  list rather than becoming one path and a truncation. */
+const MAX_PATH_CHARS = 120;
+/** How many of them a dialog shows before it says how many more there are. */
+const MAX_LOCATIONS = 12;
+
 /** Bounds an Agent-supplied string on its way to a dialog. */
 export function clampForDisplay(text: string, limit: number): string {
-  return text.length <= limit ? text : `${text.slice(0, limit - 1)}…`;
+  if (text.length <= limit) return text;
+  // A caller that spent its budget on its own sentences first can arrive with
+  // nothing left, and `slice` counts a negative end from the end of the string —
+  // so without this a budget of -1 lets all but two characters through, which is
+  // the one case a bound exists for.
+  return limit >= 1 ? `${text.slice(0, limit - 1)}…` : "";
 }
 
 /** Compile-time assertion: `Assert<false>` is a type error. */
@@ -236,23 +268,22 @@ export type ConsentPortMatchesVsCodeApi = [
 // push the command line — the one thing being approved — off the end of it.
 // The budgets sum to less than the dialog's own limit, so nothing is crowded out.
 export const MAX_COMMAND_CHARS = 600;
+
+/** Said in every command dialog, whether or not the Agent set a variable. */
+export const INHERITS_ENVIRONMENT = "It also inherits this window's own environment.";
 export const MAX_CWD_CHARS = 240;
 const MAX_ENV_NAME_CHARS = 40;
 const MAX_ENV_VALUE_CHARS = 80;
 /**
- * Characters the environment may take up in the dialog, all variables together.
- * Beyond this the command is refused rather than described in part, so this is a
- * real ceiling: about fifteen variables of ordinary length. Configurable, because
- * an Agent forwarding a large service environment is a legitimate thing to want.
- */
-
-/**
- * What the user is approving. The command comes first and always fits, because
- * it is the thing being decided on; the directory and the environment follow.
- * Every Agent-supplied part is rendered on one line, so none of them can forge a
- * line this Client writes.
+ * What the user is approving. The command comes first, because it is the thing
+ * being decided on; the directory and the environment follow. Every
+ * Agent-supplied part is rendered on one line, so none of them can forge a line
+ * this Client writes.
  *
- * Every variable is shown or none of them is — see `environmentLines`.
+ * Shown in full or refused, and that goes for the command as much as for the
+ * environment — see `environmentLines`. A command line cut at a budget lets the
+ * Agent choose the part nobody reads: forty harmless flags and then the one that
+ * matters, and the user approves something they were never shown.
  */
 export function commandDetail(
   cwd: string,
@@ -260,12 +291,29 @@ export function commandDetail(
   commandLine: string,
   budget: number,
 ): string {
-  return [
-    oneLine(commandLine, MAX_COMMAND_CHARS),
+  const rest = [
     "",
     `Directory: ${oneLine(cwd, MAX_CWD_CHARS)}`,
+    // Above the list: a list of two reads as the whole environment, when what
+    // runs also has everything this window was started with — which on the
+    // machine somebody develops on is where their credentials are. Last, it
+    // would be the part a padded environment pushed off the end.
+    INHERITS_ENVIRONMENT,
     ...environmentLines(variables, budget),
-  ].join("\n");
+  ];
+  // The command gets everything the rest of the dialog does not need, and the
+  // environment's own ceiling is what guarantees that is never less than
+  // `MAX_COMMAND_CHARS`. A fixed share would refuse a test runner given a
+  // monorepo's worth of paths — ordinary, and nothing an Agent gains by.
+  const command = oneLine(commandLine, commandLine.length);
+  const room = MAX_DETAIL_CHARS - rest.join("\n").length - 1;
+  if (command.length > room) {
+    throw new Error(
+      `terminal.spawn: refused — the command line is ${command.length} characters and only ${room}` +
+        " can be shown for approval; a command that cannot be described in full is not one to approve",
+    );
+  }
+  return [command, ...rest].join("\n");
 }
 
 /**
@@ -294,17 +342,46 @@ function environmentLines(variables: acp.EnvVariable[], budget: number): string[
 }
 
 /**
+ * One line of somebody else's text, ready to sit inside a line this Client
+ * wrote (UBIQUITOUS.md: Sealing).
+ *
+ * A modal is a list of lines, so a value holding a newline can write lines of
+ * its own — a plausible-looking end of the dialog, then blank space, then the
+ * variable nobody scrolled to.
+ *
+ * The characters that reorder text go with them, and are removed rather than
+ * escaped because there is no escaping them: a right-to-left override draws the
+ * rest of its line backwards, so a value ending in one decides how this
+ * Client's own words beside it read. Text that meant them loses them, and that
+ * is the right trade here — a path or an argument in Hebrew or Arabic still
+ * renders from its own letters, and this dialog is the last thing shown before
+ * a command runs or a launch is trusted (ADR-0007), so a line that reads a
+ * little differently beats a line that reads as something else.
+ *
+ * Exported because the approval dialog needs the same rule without a limit:
+ * two copies of it are how one of them came to be missing what the other had.
+ */
+export function flatLine(text: string): string {
+  return text.replace(REORDERING, "").replace(/\s+/g, " ").trim();
+}
+
+/**
  * One line of at most `limit` characters, whatever the Agent sent. Arguments
  * that a shell would have needed quotes for keep them, so what the user reads
  * still says where one argument ends and the next begins.
  */
 function oneLine(text: string, limit: number): string {
-  return clampForDisplay(text.replace(/\s+/g, " ").trim(), limit);
+  return clampForDisplay(flatLine(text), limit);
 }
 
 /** The command line as the user should read it: one argument, one word. */
 export function commandLineOf(command: string, args: string[]): string {
-  return [command, ...args].map(quoted).join(" ");
+  // Sealed a word at a time and before quoting, not over the finished line:
+  // `quoted` decides on the characters a shell would need quotes for, and a
+  // control about to be removed must not be what puts an argument in quotes it
+  // never needed. The whitespace inside an argument is left as it is — this
+  // line is what is being approved, and `quoted` already keeps it one word.
+  return [command, ...args].map((word) => quoted(word.replace(REORDERING, ""))).join(" ");
 }
 
 function quoted(word: string): string {

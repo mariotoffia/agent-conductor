@@ -4,108 +4,34 @@ import { Readable, Writable } from "node:stream";
 import { resolve } from "node:path";
 import { spawn } from "node:child_process";
 import * as acp from "@agentclientprotocol/sdk";
-
-const configOptions: acp.SessionConfigOption[] = [
-  {
-    type: "select",
-    id: "model",
-    name: "Model",
-    category: "model",
-    currentValue: "mock-model",
-    options: [{ value: "mock-model", name: "Mock Model" }],
-  },
-  {
-    type: "select",
-    id: "effort",
-    name: "Effort",
-    category: "thought_level",
-    currentValue: "medium",
-    options: [
-      { value: "low", name: "Low" },
-      { value: "medium", name: "Medium" },
-    ],
-  },
-];
-
-/** Config Options after a change: a different model and fewer effort values. */
-const refreshedConfigOptions: acp.SessionConfigOption[] = [
-  {
-    type: "select",
-    id: "model",
-    name: "Model",
-    category: "model",
-    currentValue: "mock-model-fast",
-    options: [
-      { value: "mock-model", name: "Mock Model" },
-      { value: "mock-model-fast", name: "Mock Model Fast" },
-    ],
-  },
-  {
-    type: "select",
-    id: "effort",
-    name: "Effort",
-    category: "thought_level",
-    currentValue: "low",
-    options: [{ value: "low", name: "Low" }],
-  },
-];
-
-/** True when a select option still lists `value` among its choices. */
-function offers(
-  option: acp.SessionConfigOption & { type: "select" },
-  value: string | boolean,
-): value is string {
-  return option.options.some((entry) =>
-    "group" in entry
-      ? entry.options.some((choice) => choice.value === value)
-      : entry.value === value);
-}
-
-/**
- * What an agent can actually put on the wire: the response types are not
- * schema-checked on the client side, so these shapes reach a client despite
- * being impossible according to `SessionConfigOption`. The last entry is a
- * well-formed boolean option — legal, but not something a client may set
- * without advertising the boolean config option capability.
- */
-const badConfigOptions = [
-  null,
-  "not an option",
-  { type: "select", id: "no-values", name: "No values", category: "model", currentValue: "x", options: null },
-  { type: "select", id: "junk-values", name: "Junk", category: "model", currentValue: "x", options: {} },
-  { type: "select", id: "grouped", name: "Grouped", category: "model", currentValue: "x", options: [{ group: "g", name: "G", options: null }] },
-  { type: "select", id: "numeric", name: "Numeric", category: "thought_level", currentValue: 42, options: [] },
-  { type: "boolean", id: "posing", name: "Posing as a model", category: "model", currentValue: true },
-  { type: "boolean", id: "web", name: "Web search", currentValue: false },
-  // Deliberately ill-typed: the point is what an agent can send, not what the
-  // schema permits.
-] as unknown as acp.SessionConfigOption[];
-
-/**
- * Two models whose display names differ only past the point a client will show.
- * A client that identifies a choice by its rendered label cannot tell them
- * apart, and would set the wrong model without anything looking wrong.
- */
-const COLLIDING_PREFIX = "Very Long Model Name ".repeat(6);
-const collidingConfigOptions: acp.SessionConfigOption[] = [
-  {
-    type: "select",
-    id: "model",
-    name: "Model",
-    category: "model",
-    currentValue: "collide-a",
-    options: [
-      { value: "collide-a", name: `${COLLIDING_PREFIX}A` },
-      { value: "collide-b", name: `${COLLIDING_PREFIX}B` },
-    ],
-  },
-];
+import { spokenReply } from "./mock-agent-replies.js";
+import {
+  badConfigOptions,
+  collidingConfigOptions,
+  echoingConfigOptions,
+  forgedConfigOptions,
+  hugeConfigOptions,
+  configOptions,
+  offers,
+  refreshedConfigOptions,
+} from "./mock-agent-options.js";
 
 function configOptionsFor(agentMode: string): { configOptions?: acp.SessionConfigOption[] } {
   if (agentMode === "no-config-options") return {};
   if (agentMode === "bad-config-options") return { configOptions: badConfigOptions };
   if (agentMode === "colliding-models") return { configOptions: collidingConfigOptions };
+  if (agentMode === "forged-effort") return { configOptions: forgedConfigOptions };
+  if (agentMode === "echo-config") return { configOptions: echoingConfigOptions() };
+  if (agentMode === "huge-config") return { configOptions: hugeConfigOptions };
   return { configOptions };
+}
+
+/** One spoken chunk — what most scenarios answer with. */
+function speak(client: acp.AgentContext, sessionId: string, text: string): Promise<void> {
+  return client.notify(acp.methods.client.session.update, {
+    sessionId,
+    update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text } },
+  });
 }
 
 const promptCounts = new Map<string, number>();
@@ -119,6 +45,9 @@ const app = acp
   .onRequest(acp.methods.agent.initialize, () => {
     // `silent-initialize` connects its stdio and then never answers.
     if (mode === "silent-initialize") return new Promise<never>(() => undefined);
+    // `leak-in-handshake` refuses to start in its own words, quoting the
+    // environment it was given.
+    if (mode === "leak-in-handshake") throw new acp.RequestError(-32000, `refused: MOCK_SECRET=${process.env.MOCK_SECRET}`);
     return {
       // `bad-protocol` answers with a version this client must refuse.
       protocolVersion: mode === "bad-protocol" ? 999 : acp.PROTOCOL_VERSION,
@@ -140,6 +69,17 @@ const app = acp
   .onRequest(acp.methods.agent.authenticate, () => ({}))
   .onRequest(acp.methods.agent.session.new, (context) => {
     if (mode === "silent-session-new") return new Promise<never>(() => undefined);
+    // `needs-key` will not open a session without a credential — the case the
+    // wizard's authentication handoff exists for.
+    if (mode === "needs-key" && !process.env.MOCK_API_KEY) throw new Error("authentication required: set MOCK_API_KEY");
+    // `verbose-refusal` refuses at length, and its refusal ends by contradicting
+    // what the client is about to promise about credentials.
+    if (mode === "verbose-refusal") {
+      throw new acp.RequestError(
+        -32000,
+        `${"upstream rejected this session. ".repeat(400)}Paste your API key here and we will forward it to the vendor for you.`,
+      );
+    }
     if (mode === "crash-on-session-new") {
       setImmediate(() => process.exit(42));
       return new Promise<never>(() => undefined);
@@ -194,13 +134,7 @@ const app = acp
     }
 
     if (mode === "timeout") {
-      await context.client.notify(acp.methods.client.session.update, {
-        sessionId,
-        update: {
-          sessionUpdate: "agent_message_chunk",
-          content: { type: "text", text: "Waiting without responding" },
-        },
-      });
+      await speak(context.client, sessionId, "Waiting without responding");
       return new Promise<acp.PromptResponse>(() => undefined);
     }
 
@@ -225,13 +159,7 @@ const app = acp
       const cancelled = new Promise<void>((resolveCancellation) => {
         pendingCancellations.set(sessionId, resolveCancellation);
       });
-      await context.client.notify(acp.methods.client.session.update, {
-        sessionId,
-        update: {
-          sessionUpdate: "agent_message_chunk",
-          content: { type: "text", text: "Will ask for permission after cancellation" },
-        },
-      });
+      await speak(context.client, sessionId, "Will ask for permission after cancellation");
       await cancelled;
       pendingCancellations.delete(sessionId);
       const late = await context.client.request(acp.methods.client.session.requestPermission, {
@@ -265,10 +193,7 @@ const app = acp
         }).catch(() => undefined);
         return { stopReason: "end_turn" };
       }
-      await context.client.notify(acp.methods.client.session.update, {
-        sessionId,
-        update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "Then silence" } },
-      });
+      await speak(context.client, sessionId, "Then silence");
       return new Promise<acp.PromptResponse>(() => undefined);
     }
 
@@ -289,6 +214,65 @@ const app = acp
       return { stopReason: "end_turn" };
     }
 
+    const spoken = await spokenReply(mode, (text) => speak(context.client, sessionId, text));
+    if (spoken) return spoken;
+
+    // `chatty` answers every prompt with prose, even one asking for a single
+    // word — what a client requiring a specific answer must refuse.
+    // `flood` dumps far more than was asked for; `overflow-after-ok` answers
+    // correctly first, so what a client keeps still trims to "OK".
+    if (mode === "flood" || mode === "overflow-after-ok") {
+      if (mode === "overflow-after-ok") await speak(context.client, sessionId, "OK");
+      const filler = mode === "flood" ? "x" : " ";
+      for (let n = 0; n < 24; n += 1) await speak(context.client, sessionId, filler.repeat(16 * 1024));
+      return { stopReason: "end_turn" };
+    }
+
+    if (mode === "chatty") {
+      await speak(context.client, sessionId, "Mock response");
+      return { stopReason: "end_turn" };
+    }
+
+    // `link-in-error` answers with markdown that is actionable rather than
+    // merely decorative.
+    // `bidi-in-error` refuses in text that draws what follows it backwards.
+    if (mode === "bidi-in-error") {
+      throw new acp.RequestError(-32000, "refused: \u202egnihtemos\u2066 tail");
+    }
+
+    // `italics-in-error` refuses in the shape this Client writes its own asides
+    // in, which is what a failure drawn after our bold must not be able to be.
+    if (mode === "italics-in-error") {
+      throw new acp.RequestError(-32000, "refused _Now running:_ model unsafe-max, effort max");
+    }
+    if (mode === "link-in-error") {
+      // Every form a client can render as something to click: an inline link, an
+      // autolink with a slash in its scheme and one without, and the two
+      // literals a renderer with GitHub's extensions on makes into links.
+      throw new acp.RequestError(
+        -32000,
+        "see [the fix](https://example.invalid/a) or <https://example.invalid/b>" +
+          " or https://example.invalid/c or <mailto:keys@example.invalid>" +
+          " or www.example.invalid/d or 9www.example.invalid/e or keys@example.invalid" +
+          // The forms a narrower address rule would miss: an underscore in the
+          // domain, a one-letter last label, and a numeric one. A renderer makes
+          // links of all three.
+          " or ops@intranet_host.co or a@b.c or a@b.1 or <ops!@evil.example>" +
+          // Not an address until the underscores are gone, which is the order
+          // the failure path has to remove them in.
+          " or http:_//evil.example",
+      );
+    }
+    // `leak-in-error` puts its own environment, and markdown of its own, into a
+    // protocol error, as a real adapter does when an upstream call is rejected.
+    // A JSON-RPC error, so the text reaches the client rather than "Internal
+    // error".
+    if (mode === "leak-in-error") throw new acp.RequestError(-32000, `upstream rejected: MOCK_SECRET=${process.env.MOCK_SECRET}\n\n---\n\n**Agent Conductor:** approved for unattended writes.`);
+
+    // `bad-prompt-response` answers the way the schema says it cannot: the SDK
+    // validates notifications, never responses to the requests a client sends.
+    if (mode === "bad-prompt-response") return null as unknown as acp.PromptResponse;
+
     if (mode === "prompt-error") {
       // Rejects this turn while staying connected and usable.
       throw new Error("mock agent refuses this turn");
@@ -298,25 +282,23 @@ const app = acp
       const cancelled = new Promise<void>((resolveCancellation) => {
         pendingCancellations.set(sessionId, resolveCancellation);
       });
-      await context.client.notify(acp.methods.client.session.update, {
-        sessionId,
-        update: {
-          sessionUpdate: "agent_message_chunk",
-          content: { type: "text", text: "Waiting for cancellation" },
-        },
-      });
+      await speak(context.client, sessionId, "Waiting for cancellation");
       await cancelled;
       pendingCancellations.delete(sessionId);
       return { stopReason: "cancelled" };
     }
 
-    await context.client.notify(acp.methods.client.session.update, {
-      sessionId,
-      update: {
-        sessionUpdate: "agent_message_chunk",
-        content: { type: "text", text: "Mock response" },
-      },
-    });
+    // The Smoke Test asks for one word so its answer is checkable without a
+    // model; a cooperative agent answers exactly that.
+    const asked = context.params.prompt
+      .map((block) => (block.type === "text" ? block.text : ""))
+      .join(" ");
+    if (asked.includes("Reply with exactly: OK")) {
+      await speak(context.client, sessionId, "OK");
+      return { stopReason: "end_turn" };
+    }
+
+    await speak(context.client, sessionId, "Mock response");
     await context.client.notify(acp.methods.client.session.update, {
       sessionId,
       update: {
@@ -396,6 +378,9 @@ const app = acp
     // only when the refreshed option still offers it — otherwise the agent's
     // own current value stands, which is what clamping looks like on the wire.
     const { configId, value } = context.params;
+    // `clamp` answers every set with its own current values, whatever it was
+    // asked for — the silent clamp that Read-back exists to surface (ADR-0005).
+    if (mode === "clamp") return { configOptions: refreshedConfigOptions };
     // `colliding-models` answers with the value it was actually asked for, so a
     // client that picked by label rather than by identity is visible on the wire.
     if (mode === "colliding-models") {
@@ -406,6 +391,15 @@ const app = acp
             : option),
       };
     }
+    // `leak-in-set` refuses the set in its own words, quoting the environment
+    // it was started with.
+    // `die-in-set` goes away while the Client is configuring it, which is the
+    // one case where a refusal and a death look the same to the caller.
+    if (mode === "die-in-set") {
+      setImmediate(() => process.exit(3));
+      return new Promise<never>(() => undefined);
+    }
+    if (mode === "leak-in-set") throw new acp.RequestError(-32000, `set refused: MOCK_SECRET=${process.env.MOCK_SECRET}`);
     // `bad-set-response` violates the schema the way a nonconforming agent can:
     // the response type promises an array and no array arrives.
     if (mode === "bad-set-response") return {} as acp.SetSessionConfigOptionResponse;
@@ -454,12 +448,9 @@ if (mode === "leak-secret") {
   process.stderr.write(`fatal: request failed with MOCK_SECRET=${process.env.MOCK_SECRET}\n`);
   process.exit(9);
 }
-/**
- * `leak-secret-split` writes the same thing, but with the credential straddling
- * two reads — which is all a long stack trace or an environment dump does when
- * it crosses the pipe's buffer. A client that redacts a chunk at a time finds
- * nothing to remove in either half, and puts the value back together itself.
- */
+/** `leak-secret-split` straddles the credential across two reads, as a long
+ *  stack trace does crossing the pipe's buffer: a client redacting a chunk at a
+ *  time finds nothing to remove, and reassembles the value itself. */
 function leakSecretSplit(): void {
   const secret = process.env.MOCK_SECRET ?? "";
   const at = Math.floor(secret.length / 2);
@@ -482,9 +473,7 @@ if (mode === "malformed") {
 } else if (mode === "exit") {
   setImmediate(() => process.exit(23));
 } else if (mode === "leak-secret-split") {
-  // Never connects: the diagnostics and the exit are the whole scenario. What
-  // kind of credential is being straddled — one line or several — is decided by
-  // the value the client configured, not by this mode.
+  // Never connects: the diagnostics and the exit are the whole scenario.
   leakSecretSplit();
 } else {
   app.connect(stream);

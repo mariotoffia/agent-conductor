@@ -44,6 +44,43 @@ export interface ExecutablePortOptions {
  */
 export const MAX_DIGEST_BYTES = 64 * 1024 * 1024;
 
+/**
+ * Commands whose whole purpose is to fetch code and run or install it. Naming one
+ * as a launch command is a mistake rather than a choice — what it downloads is
+ * decided at launch time, so no fingerprint the user approved can describe it
+ * (ADR-0007), and installing an Adapter is a separate exact-version wizard action.
+ *
+ * General-purpose runtimes (`node`, `bun`, `deno`) are deliberately absent, because
+ * refusing them would refuse every locally installed agent that ships as a script.
+ * They can reach the network too (`deno run https://…`), which is why the guarantee
+ * does not rest here: the whole argv is fingerprinted, so a launch that fetches
+ * through one of them is one the user approved by sight (ADR-0007).
+ */
+const PACKAGE_RUNNERS = new Set([
+  "npx", "pnpx", "bunx", "uvx", "pipx",
+  "npm", "pnpm", "yarn", "corepack", "uv", "pip", "pip3",
+]);
+
+/** Extensions Windows appends to an executable, possibly stacked. */
+const WINDOWS_EXECUTABLE_SUFFIX = /(?:\.(?:exe|cmd|bat|ps1|com))+$/;
+
+/** The name the operating system would actually look up: Windows discards
+ *  trailing dots and spaces, and an extension says nothing about what runs. */
+function commandName(command: string): string {
+  const separator = Math.max(command.lastIndexOf("/"), command.lastIndexOf("\\"));
+  return command
+    .slice(separator + 1)
+    .toLowerCase()
+    .replace(/[.\s]+$/, "")
+    .replace(WINDOWS_EXECUTABLE_SUFFIX, "");
+}
+
+/** Whether a command is one of those runners, judged by the name the operating
+ *  system would actually look up rather than by what was typed. */
+export function isPackageRunner(command: string): boolean {
+  return PACKAGE_RUNNERS.has(commandName(command));
+}
+
 /** PATH lookup and content digest over the real filesystem. */
 export function executablePort(options: ExecutablePortOptions = {}): ExecutablePort {
   const searchPath = options.path ?? process.env.PATH ?? "";

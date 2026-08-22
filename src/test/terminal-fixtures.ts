@@ -1,6 +1,7 @@
-import { mkdtemp } from "node:fs/promises";
+import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import type { TestContext } from "node:test";
 import type { TerminalService } from "../vscode/terminals.js";
 import type { ClientOperation, Consent } from "../vscode/permissions.js";
 
@@ -35,7 +36,13 @@ export function shownDetail(): Consent & { readonly details: string[] } {
   };
 }
 
-export const workspace = (): Promise<string> => mkdtemp(join(tmpdir(), "conductor-term-"));
+/** A workspace for one test, removed with it. These run on every `make test`,
+ *  and one left per test fills the temp directory within a week. */
+export const workspace = async (t?: TestContext): Promise<string> => {
+  const made = await mkdtemp(join(tmpdir(), "conductor-term-"));
+  t?.after(() => rm(made, { recursive: true, force: true }));
+  return made;
+};
 
 /** Runs a snippet of JavaScript as the agent's command; no shell anywhere. */
 export const script = (source: string, ...args: string[]): { command: string; args: string[] } => ({

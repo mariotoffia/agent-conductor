@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
+import type { RuntimeSetting } from "../../vscode/config.js";
+import { readdir, readFile } from "node:fs/promises";
 import { test } from "node:test";
 import {
   readSettings,
@@ -231,4 +232,105 @@ test("an environment budget beyond what a prompt can show is reported, not silen
 
   assert.equal(settings["permissions.maxEnvironmentChars"], 900);
   assert.match(problems.join("\n"), /maxEnvironmentChars/);
+});
+
+test("a runtime named after an Object member is still just a runtime", () => {
+  const { settings } = readSettings(
+    source({ runtimes: { toString: { command: "/opt/bin/agent" }, claude: {} } }),
+  );
+
+  // Ids are settings keys, so one can be spelled like a member of every object.
+  // What matters is that it validates as an entry and reaches the catalog as
+  // one — `runtime_registry.test.ts` pins that it cannot take the catalog down.
+  // Read the way every consumer reads it — by id, from the record's own keys.
+  const entry: RuntimeSetting | undefined = Object.entries(settings.runtimes).find(
+    ([id]) => id === "toString",
+  )?.[1];
+  assert.equal(entry?.command, "/opt/bin/agent");
+  assert.deepEqual(Object.keys(settings.runtimes).sort(), ["claude", "toString"]);
+});
+
+test("a credential pasted into a suppression plan's environment is refused", () => {
+  const { settings, problems } = readSettings(
+    source({
+      runtimes: {
+        codex: {
+          suppression: {
+            env: { OPENAI_API_KEY: "sk-live-pasted-into-settings" },
+            delegationTools: ["spawn_agent"],
+          },
+        },
+      },
+    }),
+  );
+
+  // `secretEnvironment` catches this shape; a suppression plan's environment is
+  // the same settings file and the same hazard — synced, and often committed.
+  assert.deepEqual(settings.runtimes, {});
+  assert.ok(problems.some((problem) => /codex/.test(problem)), problems.join("\n"));
+  assert.equal(problems.join("\n").includes("sk-live-pasted-into-settings"), false, "and never echoed");
+});
+
+test("every setting the manifest declares is one the client reads", async () => {
+  const manifest = JSON.parse(
+    await readFile(new URL("../../../package.json", import.meta.url), "utf8"),
+  ) as { contributes: { configuration: { properties: Record<string, unknown> } } };
+  const declared = Object.keys(manifest.contributes.configuration.properties);
+  const { settings } = readSettings(source({}));
+  const known = new Set(Object.keys(settings));
+
+  // The other direction from the schema test above. A key added to the manifest
+  // and to nothing else is a setting that silently does nothing — which is how
+  // `claude.hideSubscriptionAuth` sat inert while its description promised a
+  // security property.
+  const unread = declared
+    .map((key) => key.replace(/^agentConductor\./, ""))
+    .filter((key) => !known.has(key));
+  assert.deepEqual(unread, [], `declared but never parsed: ${unread.join(", ")}`);
+});
+
+/**
+ * Settings the client parses but nothing acts on yet, and why.
+ *
+ * Parsing a setting is not reading it: `readSettings` validates all of these,
+ * and a user who sets one gets no error and no effect. Naming them here is the
+ * honest version of that — and the test below fails both ways, so a setting
+ * that gains a consumer has to be taken off the list.
+ */
+const NOT_ACTED_ON: Record<string, string> = {
+  "orchestration.maxSpawnDepth": "no orchestrator to bound",
+  "orchestration.maxConcurrentSubagents": "no orchestrator to bound",
+  "orchestration.budgetUsdPerSubagent": "no orchestrator to bound",
+  "orchestration.subagentIsolation": "no orchestrator to isolate",
+  "orchestration.defaultSubagentPreset": "no orchestrator to configure",
+  "presets": "chosen per subagent, and nothing spawns one yet",
+  "worktrees.root": "nothing creates a worktree yet",
+  "gemini.writeWorkspaceSettings": "the workspace suppression channel is not wired end to end",
+  "sessions.resumeOnStartup": "sessions are not persisted, so there is nothing to resume",
+};
+
+test("a setting nothing acts on is one this client admits to", async () => {
+  const { settings } = readSettings(source({}));
+  const directories = ["../../core", "../../vscode"].map((at) => new URL(`${at}/`, import.meta.url));
+  const sources = (
+    await Promise.all(
+      directories.map(async (directory) =>
+        Promise.all(
+          (await readdir(directory))
+            .filter((name) => name.endsWith(".ts") && name !== "config.ts")
+            .map((name) => readFile(new URL(name, directory), "utf8")),
+        ),
+      ),
+    )
+  )
+    .flat()
+    .join("\n");
+
+  // Consumers name a setting by its key: `settings()["registry.url"]`.
+  const acted = Object.keys(settings).filter((key) => sources.includes(`"${key}"`));
+  assert.deepEqual(
+    Object.keys(settings).filter((key) => !acted.includes(key)).sort(),
+    Object.keys(NOT_ACTED_ON).sort(),
+    "a setting gained or lost a consumer without this list being updated",
+  );
 });

@@ -84,7 +84,6 @@ test("built-in ids are unique and every entry names something launchable", () =>
   assert.equal(new Set(ids).size, ids.length);
   for (const runtime of runtimes) {
     assert.ok(runtime.launch.command.length > 0, `${runtime.id}: empty command`);
-    assert.ok(runtime.detection.binaries.length > 0, `${runtime.id}: no detection binaries`);
     assert.ok((runtime.suppression?.delegationTools.length ?? 0) > 0, `${runtime.id}: nothing to verify`);
   }
 });

@@ -87,7 +87,11 @@ gate-selftest: ## Prove the gates still fail when they should
 	  rm -rf $$tmp; test $$rc -eq 0
 	@$(MAKE) --no-print-directory pipe-probe >/dev/null 2>&1 \
 	  && { echo "FAIL: a failing command in a piped recipe reports success — check SHELL pipefail"; exit 1; } \
-	  || echo "gate self-test: OK"
+	  || true
+	@tmp=$$(mktemp -d); $(NODE) scripts/run-unit-tests.mjs $$tmp >/dev/null 2>&1 \
+	  && { rm -rf $$tmp; echo "FAIL: the unit suite reports success having run nothing"; exit 1; } \
+	  || rm -rf $$tmp
+	@echo "gate self-test: OK"
 
 # Must fail. Invoked only by gate-selftest, which asserts that it does.
 pipe-probe:

@@ -151,7 +151,7 @@
       "properties": {
         "agentConductor.runtimes": {
           "type": "object",
-          "scope": "resource",
+          "scope": "window",
           "default": {},
           "markdownDescription": "Configured agent runtimes, keyed by id. Managed by the wizard; hand-editable.",
           "additionalProperties": {
@@ -259,7 +259,7 @@
         },
         "agentConductor.presets": {
           "type": "object",
-          "scope": "resource",
+          "scope": "window",
           "default": {},
           "markdownDescription": "Named (runtime, model, effort) presets usable from `/spawn` and as orchestrator defaults.",
           "additionalProperties": {
@@ -279,20 +279,24 @@
         },
         "agentConductor.orchestration.enabled": {
           "type": "boolean",
+          "scope": "machine",
           "default": false
         },
         "agentConductor.orchestration.maxConcurrentSubagents": {
           "type": "number",
+          "scope": "machine",
           "default": 3,
           "minimum": 1,
           "maximum": 16
         },
         "agentConductor.orchestration.maxSpawnDepth": {
           "type": "number",
+          "scope": "machine",
           "default": 1,
           "description": "Depth below which the orchestrator MCP server is not injected (recursion guard)."
         },
         "agentConductor.orchestration.subagentIsolation": {
+          "scope": "machine",
           "type": "string",
           "enum": [
             "shared",
@@ -302,14 +306,17 @@
         },
         "agentConductor.orchestration.budgetUsdPerSubagent": {
           "type": "number",
+          "scope": "machine",
           "default": 2
         },
         "agentConductor.orchestration.defaultSubagentPreset": {
+          "scope": "machine",
           "type": "string",
           "default": ""
         },
         "agentConductor.permissions.autoAllowClientOperations": {
           "type": "array",
+          "scope": "machine",
           "items": {
             "type": "string",
             "enum": [
@@ -328,6 +335,7 @@
         },
         "agentConductor.permissions.autoRejectClientOperations": {
           "type": "array",
+          "scope": "machine",
           "items": {
             "type": "string",
             "enum": [
@@ -343,22 +351,25 @@
         },
         "agentConductor.permissions.rememberAlwaysChoices": {
           "type": "boolean",
+          "scope": "machine",
           "default": true
         },
         "agentConductor.permissions.maxEnvironmentChars": {
           "type": "number",
           "default": 900,
           "minimum": 0,
-          "maximum": 1100,
+          "maximum": 1053,
           "markdownDescription": "How much of a command's environment the approval prompt will show. A command whose environment does not fit is refused rather than described in part, so that an agent cannot choose which variable you do not read. Raise it for agents that legitimately forward large service environments; it can never exceed what one prompt can display."
         },
         "agentConductor.claude.hideSubscriptionAuth": {
+          "scope": "machine",
           "type": "boolean",
           "default": true,
-          "markdownDescription": "Pass `--hide-claude-auth` to disable claude.ai subscription credentials; configure API-key or supported cloud-provider authentication for Agent Conductor."
+          "markdownDescription": "Pass `--hide-claude-auth` so Claude runs on an API key rather than a claude.ai subscription, as third-party products must. Part of the launch identity: changing it asks you to approve the runtime again."
         },
         "agentConductor.gemini.writeWorkspaceSettings": {
           "type": "boolean",
+          "scope": "machine",
           "default": false,
           "description": "Allow merging subagent-suppression keys into the workspace .gemini/settings.json (asked once by the wizard)."
         },
@@ -368,21 +379,25 @@
         },
         "agentConductor.registry.url": {
           "type": "string",
+          "scope": "machine",
           "default": "https://cdn.agentclientprotocol.com/registry/v1/latest/registry.json"
         },
         "agentConductor.registry.pin": {
           "type": "object",
+          "scope": "machine",
           "default": {},
           "additionalProperties": {
             "type": "string"
           }
         },
         "agentConductor.sessions.resumeOnStartup": {
+          "scope": "machine",
           "type": "boolean",
           "default": false
         },
         "agentConductor.worktrees.root": {
           "type": "string",
+          "scope": "machine",
           "default": ""
         },
         "agentConductor.ui.showThinking": {
@@ -421,7 +436,7 @@
     "watch": "node esbuild.mjs --watch",
     "lint": "eslint src --max-warnings 0",
     "typecheck": "tsc --noEmit",
-    "test": "node --import tsx --import ./src/test/leak-guard.ts --test \"src/test/unit/**/*.test.ts\"",
+    "test": "node scripts/run-unit-tests.mjs",
     "test:integration": "node --import tsx src/test/integration/runTests.ts"
   },
   "dependencies": {

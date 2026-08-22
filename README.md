@@ -22,7 +22,7 @@ An agent CLI is a program that runs with your permissions. It is not a sandboxed
 - **Starting a session never downloads anything.** Only programs already on your machine are run. Installing one is a separate step, and it names an exact version.
 - **Handing work to other CLIs is off** until you turn it on.
 - **Git worktrees keep changes apart, not agents.** They stop two agents editing the same files. They do not limit what an agent can read or run.
-- **Claude sessions need an API key.** Signing in with a claude.ai subscription is disabled by default. Keys live in VS Code's secret storage; your settings hold only the name of the key, never its value.
+- **Claude sessions need an API key.** Signing in with a claude.ai subscription is disabled by default — the adapter is launched with `--hide-claude-auth`, and that is part of what you approve. Keys live in VS Code's secret storage; your settings hold only the name of the key, never its value.
 - **Permission prompts say what the extension is about to do** — read this file, run this command — rather than repeating the agent's own description of it.
 
 ## Everyday commands

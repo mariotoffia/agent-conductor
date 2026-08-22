@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import type * as acp from "@agentclientprotocol/sdk";
 import {
+  applyRequestedSelections,
   asConfigOptions,
   discoverConfig,
   isMismatch,
@@ -255,4 +256,72 @@ test("a value that also looks like a group is one shape to the validator and the
     { value: "sonnet", label: "Sonnet" },
   ]);
   assert.equal(config.model?.currentValue, "opus");
+});
+
+/**
+ * Applying the selection a Session was opened with (ADR-0005).
+ */
+
+const selector = (id: string, current: string, values: string[]) => ({
+  id,
+  name: id,
+  currentValue: current,
+  choices: values.map((value) => ({ value, label: value })),
+});
+
+test("a refused selection stops the next one being asked for", async () => {
+  const asked: string[] = [];
+  const session = {
+    config: {
+      model: selector("model", "a", ["a", "b"]),
+      effort: selector("effort", "low", ["low", "high"]),
+      other: [],
+    },
+    setConfigOption: async (configId: string) => {
+      asked.push(configId);
+      throw new Error("the agent answered nothing useful");
+    },
+  };
+
+  await applyRequestedSelections(session, { model: "b", effort: "high" }, () => undefined);
+
+  // Each attempt is bounded by a Setup Deadline, so an Agent that could not
+  // answer the first would double how long a Session takes to open.
+  assert.deepEqual(asked, ["model"]);
+});
+
+test("a value the agent does not list is never asked for", async () => {
+  const asked: string[] = [];
+  const session = {
+    config: { model: selector("model", "a", ["a", "b"]), other: [] },
+    setConfigOption: async (configId: string) => {
+      asked.push(configId);
+      return session.config;
+    },
+  };
+
+  await applyRequestedSelections(session, { model: "gone-in-this-release" }, () => undefined);
+
+  assert.deepEqual(asked, [], "a stale setting is a mismatch, not a request");
+});
+
+test("what an agent says it is running is read back even where its own list omits it", () => {
+  const config = discoverConfig([
+    {
+      type: "select",
+      id: "model",
+      name: "Model",
+      category: "model",
+      currentValue: "mock-model-preview",
+      options: [{ value: "mock-model", name: "Mock Model" }],
+    },
+  ] as acp.SessionConfigOption[]);
+
+  // Effective comes from the Agent and nowhere else (ADR-0005). A list that
+  // does not contain the value is the Agent contradicting itself, and the
+  // honest answer is what it says it is running — not the nearest thing on the
+  // list, which would report a model nobody is being charged for.
+  assert.equal(readBack(config.model, "mock-model").effective, "mock-model-preview");
+  assert.equal(readBack(config.model, "mock-model").verification, "verified");
+  assert.equal(isMismatch(readBack(config.model, "mock-model")), true);
 });

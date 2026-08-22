@@ -1,12 +1,12 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
-import { test } from "node:test";
+import { test, type TestContext } from "node:test";
 import { TerminalService } from "../../vscode/terminals.js";
 import { consent, run, script, workspace } from "../terminal-fixtures.js";
 
-test("a command runs and both of its output streams are captured", async () => {
-  const root = await workspace();
+test("a command runs and both of its output streams are captured", async (t: TestContext) => {
+  const root = await workspace(t);
   const service = new TerminalService({ roots: [root], consent: consent() });
 
   const { terminalId, exit } = await run(service, {
@@ -22,8 +22,8 @@ test("a command runs and both of its output streams are captured", async () => {
   assert.deepEqual(output.exitStatus, { exitCode: 0, signal: null });
 });
 
-test("an argument is an argument: nothing is handed to a shell", async () => {
-  const root = await workspace();
+test("an argument is an argument: nothing is handed to a shell", async (t: TestContext) => {
+  const root = await workspace(t);
   const service = new TerminalService({ roots: [root], consent: consent() });
 
   const { terminalId } = await run(service, {
@@ -35,8 +35,8 @@ test("an argument is an argument: nothing is handed to a shell", async () => {
   assert.equal(output.output, "$(echo pwned); rm -rf /");
 });
 
-test("output past the byte limit is dropped from the front and flagged", async () => {
-  const root = await workspace();
+test("output past the byte limit is dropped from the front and flagged", async (t: TestContext) => {
+  const root = await workspace(t);
   const service = new TerminalService({ roots: [root], consent: consent() });
 
   const { terminalId } = await run(service, {
@@ -51,16 +51,22 @@ test("output past the byte limit is dropped from the front and flagged", async (
   assert.equal(output.truncated, true);
 });
 
-test("a killed command reports its signal and keeps its output readable", async () => {
-  const root = await workspace();
+test("a killed command reports its signal and keeps its output readable", async (t: TestContext) => {
+  const root = await workspace(t);
   const service = new TerminalService({ roots: [root], consent: consent() });
   const { terminalId } = await service.createTerminal({
     sessionId: "s1",
     ...script("process.stdout.write('started'); setInterval(() => {}, 1000)"),
     cwd: root,
   });
-  // Let it print before it is stopped.
-  await new Promise((wake) => setTimeout(wake, 200));
+  // Waited for, not slept through: the suite runs every file at once, so a fixed
+  // delay is a guess about how loaded the machine is, and the test it makes is
+  // one that fails for a reason that has nothing to do with what it protects.
+  for (let left = 200; left > 0; left -= 1) {
+    const so_far = await service.terminalOutput({ sessionId: "s1", terminalId });
+    if (so_far.output === "started") break;
+    await new Promise((wake) => setTimeout(wake, 25));
+  }
 
   await service.killTerminal({ sessionId: "s1", terminalId });
   const exit = await service.waitForTerminalExit({ sessionId: "s1", terminalId });
@@ -70,8 +76,8 @@ test("a killed command reports its signal and keeps its output readable", async 
   assert.equal(output.output, "started", "the buffer outlives the process, until release");
 });
 
-test("a released terminal is no longer a handle to anything", async () => {
-  const root = await workspace();
+test("a released terminal is no longer a handle to anything", async (t: TestContext) => {
+  const root = await workspace(t);
   const service = new TerminalService({ roots: [root], consent: consent() });
   const { terminalId } = await run(service, { ...script("process.stdout.write('x')"), cwd: root });
 
@@ -80,8 +86,8 @@ test("a released terminal is no longer a handle to anything", async () => {
   await assert.rejects(service.terminalOutput({ sessionId: "s1", terminalId }), /unknown terminal/);
 });
 
-test("an id nobody was issued is not a terminal", async () => {
-  const root = await workspace();
+test("an id nobody was issued is not a terminal", async (t: TestContext) => {
+  const root = await workspace(t);
   const service = new TerminalService({ roots: [root], consent: consent() });
 
   await assert.rejects(
@@ -90,8 +96,8 @@ test("an id nobody was issued is not a terminal", async () => {
   );
 });
 
-test("another session's terminal id is not a handle either", async () => {
-  const root = await workspace();
+test("another session's terminal id is not a handle either", async (t: TestContext) => {
+  const root = await workspace(t);
   const service = new TerminalService({ roots: [root], consent: consent() });
   const { terminalId } = await run(service, { ...script("process.stdout.write('x')"), cwd: root });
 
@@ -101,8 +107,8 @@ test("another session's terminal id is not a handle either", async () => {
   );
 });
 
-test("a command that cannot start says so instead of hanging", async () => {
-  const root = await workspace();
+test("a command that cannot start says so instead of hanging", async (t: TestContext) => {
+  const root = await workspace(t);
   const service = new TerminalService({ roots: [root], consent: consent() });
 
   const { terminalId, exit } = await run(service, {
@@ -116,8 +122,8 @@ test("a command that cannot start says so instead of hanging", async () => {
   assert.match(output.output, /ENOENT/);
 });
 
-test("disposing the service stops what it started", async () => {
-  const root = await workspace();
+test("disposing the service stops what it started", async (t: TestContext) => {
+  const root = await workspace(t);
   const service = new TerminalService({ roots: [root], consent: consent() });
   const { terminalId } = await service.createTerminal({
     sessionId: "s1",
@@ -131,8 +137,8 @@ test("disposing the service stops what it started", async () => {
   assert.equal((await running).signal, "SIGTERM");
 });
 
-test("truncation cuts on a character boundary, not through one", async () => {
-  const root = await workspace();
+test("truncation cuts on a character boundary, not through one", async (t: TestContext) => {
+  const root = await workspace(t);
   const service = new TerminalService({ roots: [root], consent: consent() });
 
   // Five two-byte characters; a limit of nine bytes must drop a whole one.
@@ -148,8 +154,8 @@ test("truncation cuts on a character boundary, not through one", async () => {
   assert.equal(output.output.includes("�"), false, "a character was cut in half");
 });
 
-test("the agent cannot raise the amount of output this client will hold", async () => {
-  const root = await workspace();
+test("the agent cannot raise the amount of output this client will hold", async (t: TestContext) => {
+  const root = await workspace(t);
   const service = new TerminalService({ roots: [root], consent: consent(), outputByteLimit: 32 });
 
   const { terminalId } = await run(service, {
@@ -163,8 +169,8 @@ test("the agent cannot raise the amount of output this client will hold", async 
   assert.equal(output.truncated, true);
 });
 
-test("output written as the command ends is all there when the wait returns", async () => {
-  const root = await workspace();
+test("output written as the command ends is all there when the wait returns", async (t: TestContext) => {
+  const root = await workspace(t);
   const service = new TerminalService({ roots: [root], consent: consent() });
 
   // A command whose own child inherits its output and writes after it exits:
@@ -182,8 +188,8 @@ test("output written as the command ends is all there when the wait returns", as
   assert.equal(output.output, "EARLYLATE");
 });
 
-test("killing a command stops what the command started", { skip: process.platform === "win32" }, async () => {
-  const root = await workspace();
+test("killing a command stops what the command started", { skip: process.platform === "win32" }, async (t: TestContext) => {
+  const root = await workspace(t);
   const service = new TerminalService({ roots: [root], consent: consent() });
   const { terminalId } = await service.createTerminal({
     sessionId: "s1",
@@ -194,20 +200,27 @@ test("killing a command stops what the command started", { skip: process.platfor
     ),
     cwd: root,
   });
-  await new Promise((wake) => setTimeout(wake, 200));
+  // Waited for rather than slept through: starting node and its grandchild takes
+  // as long as the machine takes, and a fixed delay makes this a test of the
+  // machine's load instead of the kill.
+  const output = async (): Promise<number> =>
+    (await service.terminalOutput({ sessionId: "s1", terminalId })).output.length;
+  const deadline = Date.now() + 15_000;
+  while ((await output()) === 0 && Date.now() < deadline) {
+    await new Promise((wake) => setTimeout(wake, 25));
+  }
+  assert.ok((await output()) > 0, "the command's child did run");
 
   await service.killTerminal({ sessionId: "s1", terminalId });
   await new Promise((wake) => setTimeout(wake, 200));
-  const settled = (await service.terminalOutput({ sessionId: "s1", terminalId })).output.length;
+  const settled = await output();
   await new Promise((wake) => setTimeout(wake, 300));
-  const later = (await service.terminalOutput({ sessionId: "s1", terminalId })).output.length;
 
-  assert.ok(settled > 0, "the command's child did run");
-  assert.equal(later, settled, "the command's child outlived the kill");
+  assert.equal(await output(), settled, "the command's child outlived the kill");
 });
 
-test("releasing a terminal stops the children a finished command left behind", { skip: process.platform === "win32" }, async () => {
-  const root = await workspace();
+test("releasing a terminal stops the children a finished command left behind", { skip: process.platform === "win32" }, async (t: TestContext) => {
+  const root = await workspace(t);
   const marker = join(root, "worker.log");
   const service = new TerminalService({ roots: [root], consent: consent() });
 
@@ -232,8 +245,8 @@ test("releasing a terminal stops the children a finished command left behind", {
   assert.equal((await readFile(marker, "utf8")).length, settled, "the worker outlived its terminal");
 });
 
-test("a character split across chunks is not left half-decoded", async () => {
-  const root = await workspace();
+test("a character split across chunks is not left half-decoded", async (t: TestContext) => {
+  const root = await workspace(t);
   const service = new TerminalService({ roots: [root], consent: consent() });
 
   // One emoji written a byte at a time, then a plain character: the cut lands
@@ -251,8 +264,8 @@ test("a character split across chunks is not left half-decoded", async () => {
   assert.equal(output.output.includes("�"), false, `half a character survived: ${output.output}`);
 });
 
-test("a process group this client has seen end is never signalled again", async () => {
-  const root = await workspace();
+test("a process group this client has seen end is never signalled again", async (t: TestContext) => {
+  const root = await workspace(t);
   const signals: [number, NodeJS.Signals | 0][] = [];
   const service = new TerminalService({
     roots: [root],
@@ -284,8 +297,8 @@ test("a process group this client has seen end is never signalled again", async 
   );
 });
 
-test("a recycled group id is not signalled on the strength of an id that has moved on", async () => {
-  const root = await workspace();
+test("a recycled group id is not signalled on the strength of an id that has moved on", async (t: TestContext) => {
+  const root = await workspace(t);
   const signals: [number, NodeJS.Signals | 0][] = [];
   let groupExists = true;
   const service = new TerminalService({

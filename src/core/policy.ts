@@ -88,7 +88,10 @@ const BUILT_IN_PLANS: Record<string, () => SuppressionPlan> = {
 };
 
 function builtInPlan(runtimeId: string): SuppressionPlan | undefined {
-  return BUILT_IN_PLANS[runtimeId]?.();
+  // Own keys only: a Runtime id comes from a settings key, and one spelled
+  // `constructor` or `toString` would otherwise reach up the prototype chain
+  // and hand back something that is not a plan.
+  return Object.hasOwn(BUILT_IN_PLANS, runtimeId) ? BUILT_IN_PLANS[runtimeId]?.() : undefined;
 }
 
 /** Every delegation tool the catalog knows of, whichever Runtime it belongs to.

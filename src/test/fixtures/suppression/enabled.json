@@ -2,7 +2,9 @@
   "claude": {
     "launch": {
       "command": "claude-agent-acp",
-      "args": [],
+      "args": [
+        "--hide-claude-auth"
+      ],
       "env": {}
     },
     "suppression": {

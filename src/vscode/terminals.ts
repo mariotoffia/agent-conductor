@@ -8,6 +8,7 @@ import {
   clientOperation,
   commandDetail,
   commandLineOf,
+  INHERITS_ENVIRONMENT,
   MAX_COMMAND_CHARS,
   MAX_CWD_CHARS,
   MAX_DETAIL_CHARS,
@@ -48,7 +49,8 @@ export const DEFAULT_ENV_CHARS = 900;
  * the overflow back where the Agent chooses it — which is the whole reason the
  * environment is shown or refused rather than trimmed.
  */
-export const MAX_ENV_CHARS = MAX_DETAIL_CHARS - MAX_COMMAND_CHARS - MAX_CWD_CHARS - 60;
+export const MAX_ENV_CHARS =
+  MAX_DETAIL_CHARS - MAX_COMMAND_CHARS - MAX_CWD_CHARS - INHERITS_ENVIRONMENT.length - 60;
 /** Process groups are a POSIX notion; Windows has no equivalent through Node. */
 const POSIX = process.platform !== "win32";
 /**

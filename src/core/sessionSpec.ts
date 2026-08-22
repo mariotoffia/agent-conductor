@@ -2,6 +2,15 @@ import { isAbsolute } from "node:path";
 import type * as acp from "@agentclientprotocol/sdk";
 import type { LaunchSpec } from "./types.js";
 
+/** How long a cancelled Turn may keep running before its process is terminated. */
+export const DEFAULT_CANCEL_GRACE_MS = 5_000;
+/**
+ * How long a Turn may go without any Agent activity before the Client ends it.
+ * Generous on purpose: an Agent running a long tool inside its own harness is
+ * silent on the wire, and ending such a Turn early would destroy real work.
+ */
+export const DEFAULT_STALL_TIMEOUT_MS = 600_000;
+
 /**
  * What a Session is launched with, and the rules that description must satisfy
  * before anything is spawned. Kept apart from the Session's own behaviour: this

@@ -4,22 +4,35 @@ import {
   executablePort,
   logsAt,
   nodeProcessPort,
+  describeRefresh,
+  readCachedRegistry,
+  refreshRegistry,
   resolveRuntime,
   runtimeCatalog,
   type LogLevel,
   type LogPort,
+  type RegistrySnapshot,
   type RuntimeSpec,
   type RuntimeTrust,
   type SessionPorts,
 } from "../core/index.js";
-import { readSettings, resolveSecretEnvironment, type ConductorSettings } from "./config.js";
+import {
+  fileStorage,
+  readSettings,
+  resolveSecretEnvironment,
+  type ConductorSettings,
+  type RuntimeSetting,
+} from "./config.js";
 import { DiffDocuments, DIFF_SCHEME } from "./diffDocs.js";
 import { FormElicitor, type FormHost } from "./elicitation.js";
 import { WorkspaceFs, type OpenDocuments } from "./fsProvider.js";
 import { OPEN_DIFF_COMMAND } from "./chatSink.js";
-import { ConductorParticipant, openTrustedSession, type RuntimeChoice } from "./participant.js";
+import { ConductorParticipant, type RuntimeChoice } from "./participant.js";
+import { openTrustedSession } from "./spawnGate.js";
 import { PermissionRouter, type ConsentHost } from "./permissions.js";
 import { TerminalService } from "./terminals.js";
+import { connectCli } from "./wizard.js";
+import { wizardHost, wizardTerminals } from "./wizardHost.js";
 
 /**
  * The composition root: the one module that holds the real `vscode` API and
@@ -51,8 +64,8 @@ import { TerminalService } from "./terminals.js";
  * be done wearing this extension's identity.
  */
 export interface ConductorTestHooks {
-  /** Records Runtime Trust for the identity this Runtime resolves to right now,
-   *  which is what the connection wizard will do once it exists. */
+  /** Records Runtime Trust for the identity this Runtime resolves to right now
+   *  — the connection wizard's last step, without its questions. */
   grantTrust(runtimeId: string): Promise<string>;
   /** The live participant, so a turn can be driven inside the host. */
   participant: ConductorParticipant;
@@ -68,7 +81,6 @@ export interface ConductorActivation {
   teardown(): Promise<void>;
   hooks?: ConductorTestHooks;
 }
-
 
 export function activateConductor(context: vscode.ExtensionContext): ConductorActivation {
   const channel = vscode.window.createOutputChannel("Agent Conductor", { log: true });
@@ -91,6 +103,27 @@ export function activateConductor(context: vscode.ExtensionContext): ConductorAc
   // open takes effect on the next record rather than on the next reload.
   const log = liveLogPort(channel, () => settings()["logging.level"]);
 
+  const storage = fileStorage(context.globalStorageUri.fsPath);
+  // Validated Registry snapshot, read in the background: it supplies exact
+  // Adapter versions and nothing else, the built-in catalog launches every
+  // Runtime without it, and activation must not wait on a file to hand the
+  // window a chat participant.
+  let registry: RegistrySnapshot | undefined;
+  void readCachedRegistry(storage, Date.now()).then((snapshot) => {
+    registry = snapshot;
+  });
+
+  /** Every Runtime the settings describe, optionally with one entry the wizard
+   *  has not saved yet applied on top — composed here, once, so the identity the
+   *  wizard approves is the one a Session start resolves (ADR-0007). */
+  const runtimes = (override?: { id: string; entry: RuntimeSetting }): RuntimeSpec[] => {
+    const current = settings();
+    return catalog(current, current["registry.autoResolve"] ? registry : undefined, override);
+  };
+
+  const recordTrust = (runtimeId: string, trust: RuntimeTrust): Promise<void> =>
+    Promise.resolve(context.globalState.update(trustKey(runtimeId), trust));
+
   // Replaced only through the test hooks below; the real modal otherwise.
   let consent: ConsentHost | undefined;
   const askConsent = (): ConsentHost => consent ?? modalConsentHost();
@@ -105,13 +138,15 @@ export function activateConductor(context: vscode.ExtensionContext): ConductorAc
     log,
     defaultRuntimeId: () => settings().defaultRuntime,
     showThinking: () => settings()["ui.showThinking"],
+    slashCommands: () => settings()["ui.slashCommandAllowlist"],
     pick: (items, options) => vscode.window.showQuickPick(items, options),
-    runtimes: async () => catalog(settings()).map(asChoice),
+    runtimes: async () => runtimes().map(asChoice),
     modelCatalog: (runtimeId) =>
-      catalog(settings()).find((spec) => spec.id === runtimeId)?.modelCatalog ?? [],
+      runtimes().find((spec) => spec.id === runtimeId)?.modelCatalog ?? [],
+    runtimeQuirks: (runtimeId) => runtimes().find((spec) => spec.id === runtimeId)?.quirks,
     open: async (runtimeId, onUpdate) => {
       const current = settings();
-      const spec = catalog(current).find((entry) => entry.id === runtimeId);
+      const spec = runtimes().find((entry) => entry.id === runtimeId);
       if (!spec) {
         throw new Error(
           `runtime ${runtimeId} is not configured — run "Agent Conductor: Connect a CLI…"`,
@@ -152,6 +187,9 @@ export function activateConductor(context: vscode.ExtensionContext): ConductorAc
   chat.iconPath = vscode.Uri.joinPath(context.extensionUri, "media", "icon.svg");
   context.subscriptions.push(chat);
 
+  // Built here rather than per wizard run: it registers a disposable on the
+  // context and holds the one login terminal, both of which are the window's.
+  const runInTerminal = wizardTerminals(context);
   context.subscriptions.push(
     vscode.commands.registerCommand(OPEN_DIFF_COMMAND, (id: unknown) => openDiff(diffs, id)),
     vscode.commands.registerCommand("agentConductor.newSession", async () => {
@@ -159,17 +197,34 @@ export function activateConductor(context: vscode.ExtensionContext): ConductorAc
       channel.info("session ended; the next prompt starts a new one");
     }),
     vscode.commands.registerCommand("agentConductor.cancelAll", () => participant.cancel()),
-    vscode.commands.registerCommand("agentConductor.connectCli", () => {
-      // The Connect-a-CLI wizard — detect, configure, Probe Session, policy,
-      // Smoke Test, save — is what records Runtime Trust. Until it lands, no
-      // identity is approved and every spawn is refused, which is the direction
-      // that fails closed (ADR-0007).
-      void vscode.window.showInformationMessage(
-        "The connection wizard is not available yet, so no runtime is approved to launch.",
+    // The Connect-a-CLI wizard is the only thing that records Runtime Trust:
+    // until a Runtime has been through it, no identity is approved and every
+    // spawn is refused, which is the direction that fails closed (ADR-0007).
+    vscode.commands.registerCommand("agentConductor.connectCli", () =>
+      connectCli(
+        wizardHost(context, {
+          form: formHost(),
+          consent: askConsent(),
+          channel,
+          runtimes,
+          runInTerminal,
+          recordTrust,
+          settings,
+          log,
+        }),
+      )),
+    vscode.commands.registerCommand("agentConductor.refreshRegistry", async () => {
+      const result = await vscode.window.withProgress(
+        { location: vscode.ProgressLocation.Notification, title: "Refreshing the ACP agent registry…" },
+        () => refreshRegistry(storage, settings()["registry.url"], Date.now()),
       );
+      // A failed refresh keeps whatever was cached: the built-in catalog works
+      // offline, so the only thing that must not happen is silence about it.
+      if (result.snapshot) registry = result.snapshot;
+      const said = describeRefresh(result);
+      channel.info(said);
+      void vscode.window.showInformationMessage(said);
     }),
-    vscode.commands.registerCommand("agentConductor.refreshRegistry", () =>
-      channel.info("registry refresh: not implemented")),
   );
 
   channel.info("Agent Conductor activated.");
@@ -184,14 +239,13 @@ export function activateConductor(context: vscode.ExtensionContext): ConductorAc
               consent = host;
             },
             grantTrust: async (runtimeId) => {
-              const spec = catalog(settings()).find((entry) => entry.id === runtimeId);
+              const spec = runtimes().find((entry) => entry.id === runtimeId);
               if (!spec) throw new Error(`runtime ${runtimeId} is not configured`);
               const runtime = await resolveRuntime(spec, { executable: executablePort() });
               // The fingerprint, never a flag: trust is re-derived from the
-              // resolved identity on every spawn (ADR-0007).
-              await context.globalState.update(trustKey(runtimeId), {
-                fingerprint: runtime.fingerprint,
-              } satisfies RuntimeTrust);
+              // resolved identity on every spawn (ADR-0007). Written through the
+              // same call the wizard uses, so there is one writer of trust.
+              await recordTrust(runtimeId, { fingerprint: runtime.fingerprint });
               return runtime.fingerprint;
             },
           },
@@ -201,15 +255,24 @@ export function activateConductor(context: vscode.ExtensionContext): ConductorAc
 }
 
 /** Every Runtime the settings describe, at its pinned Adapter version. */
-function catalog(settings: ConductorSettings): RuntimeSpec[] {
+function catalog(
+  settings: ConductorSettings,
+  registry?: RegistrySnapshot,
+  override?: { id: string; entry: RuntimeSetting },
+): RuntimeSpec[] {
   return runtimeCatalog({
     // Suppression is only ever needed to make Shim injection safe, so the window
     // policy follows the orchestration switch (ADR-0004).
-    policy: { suppressBuiltInSubagents: settings["orchestration.enabled"] },
-    overrides: settings.runtimes,
+    policy: {
+      suppressBuiltInSubagents: settings["orchestration.enabled"],
+      hideSubscriptionAuth: settings["claude.hideSubscriptionAuth"],
+    },
+    overrides: override ? { ...settings.runtimes, [override.id]: override.entry } : settings.runtimes,
+    ...(registry ? { registry } : {}),
     pins: settings["registry.pin"],
   });
 }
+
 
 function asChoice(spec: RuntimeSpec): RuntimeChoice {
   return {
@@ -222,9 +285,8 @@ function asChoice(spec: RuntimeSpec): RuntimeChoice {
 /**
  * Runtime Trust the user granted, keyed by Runtime id.
  *
- * Nothing writes these yet: recording one is the connection wizard's job, and it
- * is the only thing that may. Until then this answers `undefined`, every
- * resolution comes back untrusted, and no Agent is started.
+ * Written by the connection wizard, which is the only thing that may: a Runtime
+ * nobody took through it resolves untrusted, and no Agent is started for it.
  */
 function trustFor(context: vscode.ExtensionContext, spec: RuntimeSpec): RuntimeTrust | undefined {
   return context.globalState.get<RuntimeTrust>(trustKey(spec.id));

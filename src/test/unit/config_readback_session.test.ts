@@ -254,3 +254,81 @@ sessionTest("a set the Agent never answers leaves the Session unable to verify a
   // And the Session is still usable.
   assert.equal(session.state, "idle");
 });
+
+/**
+ * A Session applies the selection it was opened with. Without this the model a
+ * user picked when they connected a Runtime is a note in a settings file: every
+ * Turn runs the Agent's own default, and Read-back reports a mismatch forever.
+ */
+
+sessionTest("a session sets the selection it was asked for, then reads back what runs", async (t) => {
+  const h = harness(t);
+
+  // `low` is offered and is not what the agent currently reports, so it is the
+  // one selection worth a round trip.
+  const session = await h.open({ requestedEffort: "low" });
+
+  assert.ok(
+    h.methodsSent().includes("session/set_config_option"),
+    `the request was never sent: ${h.methodsSent().join(", ")}`,
+  );
+  assert.deepEqual(session.effortSelection, {
+    requested: "low",
+    effective: "low",
+    verification: "verified",
+  });
+});
+
+sessionTest("a stale selection is a mismatch, not a request the agent must refuse", async (t) => {
+  const h = harness(t);
+
+  // What a settings file holds after a CLI drops a model id: a value the agent
+  // does not list. Asking for it would be refused, and a refused set costs the
+  // session every Config Option it had — both pickers, not just this one.
+  const session = await h.open({ requestedModel: "mock-model-fast" });
+
+  assert.equal(
+    h.methodsSent().includes("session/set_config_option"),
+    false,
+    "nothing is asked for that the agent says it does not have",
+  );
+  assert.equal(isMismatch(session.modelSelection), true);
+  assert.deepEqual(session.modelSelection, {
+    requested: "mock-model-fast",
+    effective: "mock-model",
+    verification: "verified",
+  });
+  assert.equal(session.config.effort?.choices.length, 2, "the other picker is untouched");
+});
+
+sessionTest("a selection the agent already reports costs no round trip", async (t) => {
+  const h = harness(t);
+
+  const session = await h.open({ requestedModel: "mock-model", requestedEffort: "medium" });
+
+  assert.equal(
+    h.methodsSent().includes("session/set_config_option"),
+    false,
+    "setting a value the agent already runs is a request for nothing",
+  );
+  assert.equal(session.modelSelection.effective, "mock-model");
+  assert.equal(session.effortSelection.effective, "medium");
+});
+
+sessionTest("a selection the agent refuses leaves the session usable", async (t) => {
+  const h = harness(t);
+
+  // The value is offered, so it is asked for; the agent then answers the set
+  // with a response carrying no options at all.
+  const session = await h.open({
+    launch: launchMockAgent("bad-set-response"),
+    requestedEffort: "low",
+  });
+
+  assert.equal(session.state, "idle", "a refused selection is not a failed session");
+  assert.deepEqual(session.effortSelection, {
+    requested: "low",
+    verification: "unavailable",
+  });
+  assert.equal((await session.prompt("still working?")).stopReason, "end_turn");
+});

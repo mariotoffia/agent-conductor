@@ -4,10 +4,12 @@ import type { EffectiveSelection, ModelHint } from "./types.js";
 /**
  * Config Option discovery and Read-back (ADR-0005).
  *
- * Everything here is a pure projection of the complete Config Option array the
+ * Almost all of it is a pure projection of the complete Config Option array the
  * Agent last reported. The array is the only source of truth: model lists are
  * never synthesized, and a value is only ever called *effective* when the Agent
- * itself reported it as current.
+ * itself reported it as current. The exception is `applyRequestedSelections`,
+ * the one step that acts on that array rather than reading it — kept here so
+ * that everything ADR-0005 decides is in one file.
  */
 
 /** One selectable value of a Config Option, flattened out of its group. */
@@ -218,4 +220,51 @@ function flattenChoices(options: acp.SessionConfigSelectOptions): ConfigChoice[]
 
 function choice(option: acp.SessionConfigSelectOption): ConfigChoice {
   return { value: option.value, label: option.name };
+}
+
+/** Just enough of a Session to set a Config Option on it. */
+export interface ConfigurableSession {
+  readonly config: DiscoveredConfig;
+  setConfigOption(configId: string, value: string): Promise<DiscoveredConfig>;
+}
+
+/**
+ * Asks the Agent for the model and effort a Session was opened with.
+ *
+ * Without this a selection is only half a Read-back: the value chosen when the
+ * Runtime was connected would sit in settings while every Turn ran the Agent's
+ * own default, reported as a mismatch forever.
+ *
+ * A Runtime exposing no matching Config Option is not asked — its configuration
+ * is fixed when its process starts. Neither is a value the Agent already
+ * reports, nor one it does not list. A refusal is handed to the caller rather
+ * than raised: the Agent keeps its own default, and Read-back is what says so.
+ *
+ * The array is re-read per slot, because setting one returns a whole refreshed
+ * array in which the other selector's id need not have survived.
+ */
+export async function applyRequestedSelections(
+  session: ConfigurableSession,
+  requested: { model?: string; effort?: string },
+  refused: (slot: "model" | "effort", value: string, error: unknown) => void,
+): Promise<void> {
+  for (const slot of ["model", "effort"] as const) {
+    const value = requested[slot];
+    const selector = session.config[slot];
+    if (!selector || value === undefined || selector.currentValue === value) continue;
+    // Only for a value the Agent lists. A stale id — the ordinary result of a
+    // CLI dropping a model — would be refused, and a refused set leaves the
+    // Session with no Config Options at all, so both pickers and both
+    // Read-backs would be lost to a setting that is merely out of date.
+    if (!selector.choices.some((choice) => choice.value === value)) continue;
+    try {
+      await session.setConfigOption(selector.id, value);
+    } catch (error) {
+      refused(slot, value, error);
+      // Stop at the first failure. An Agent that could not answer this one will
+      // not answer the next, and each attempt is bounded by a Setup Deadline —
+      // so carrying on doubles how long a silent Runtime holds up a Session.
+      return;
+    }
+  }
 }

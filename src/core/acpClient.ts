@@ -2,8 +2,10 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { isAbsolute } from "node:path";
 import { Readable, Writable } from "node:stream";
 import * as acp from "@agentclientprotocol/sdk";
+import { exitError, stageError } from "./failures.js";
 import { redactionGuard, redactSecrets } from "./redaction.js";
 import type {
+  StderrEnd,
   AgentExit,
   AgentProcess,
   ClockPort,
@@ -16,7 +18,7 @@ import type {
 /** Name we report in `clientInfo`; Agents log it. */
 export const CLIENT_NAME = "agent-conductor";
 /** Diagnostics kept from the Agent's stderr, used in failure messages. */
-const STDERR_TAIL_CHARS = 8 * 1024;
+export const STDERR_TAIL_CHARS = 8 * 1024;
 /** Grace a terminated process gets before it is killed outright. */
 const SIGTERM_ESCALATION_MS = 2_000;
 /**
@@ -85,11 +87,11 @@ export const nodeProcessPort: ProcessPort = {
     // The process ending is not the output ending. `end` on the pipe is what
     // says the diagnostics are complete; the timer is there because a grandchild
     // holding the pipe would otherwise keep this pending for as long as it runs.
-    const stderrEnded = new Promise<void>((settle) => {
-      stderr.once("end", () => settle());
-      stderr.once("close", () => settle());
+    const stderrEnded = new Promise<StderrEnd>((settle) => {
+      stderr.once("end", () => settle("closed"));
+      stderr.once("close", () => settle("closed"));
       void exited.then(() => {
-        const drain = setTimeout(() => settle(), STDERR_DRAIN_MS);
+        const drain = setTimeout(() => settle("drained"), STDERR_DRAIN_MS);
         drain.unref();
       });
     });
@@ -156,8 +158,9 @@ export interface AgentLaunchOptions {
 
 /**
  * Validates the launch identity and builds the child environment: the host
- * environment inherited as-is, then catalog policy values, then values resolved
- * from SecretStorage. Conductor itself puts no secret into the inherited layer;
+ * environment inherited as-is, then values resolved from SecretStorage, then
+ * catalog policy values — which win, because a Suppression Plan travels in them
+ * and the variable a credential fills is named by settings a workspace writes. Conductor itself puts no secret into the inherited layer;
  * an Agent runs with the user's own privileges either way (ADR-0007).
  * Throws before anything is spawned when a required path is not absolute.
  */
@@ -179,7 +182,11 @@ export function buildSpawnRequest(options: AgentLaunchOptions): SpawnRequest {
     command,
     args: [...args],
     cwd: options.cwd,
-    env: { ...inherited, ...env, ...options.secretEnvironment },
+    // Catalog policy last. A Suppression Plan travels in this environment, and
+    // the variable a secret fills is named by settings a workspace can write —
+    // so a credential must not be able to displace the plan the fingerprint
+    // covers (ADR-0004, ADR-0007).
+    env: { ...inherited, ...options.secretEnvironment, ...env },
   };
 }
 
@@ -231,6 +238,18 @@ export async function connectAgent(options: AgentConnectionOptions): Promise<Age
       ` env+=[${[...Object.keys(options.launch.env), ...secretNames].join(", ")}]`,
   );
 
+  // Named, not silent: the credential does not reach the Agent, and a Runtime
+  // failing to authenticate is the obscure failure that would follow.
+  for (const name of Object.keys(options.secretEnvironment ?? {})) {
+    if (Object.hasOwn(options.launch.env, name)) {
+      log?.log(
+        "error",
+        `runtime ${runtimeId}: ${name} is set by this runtime's own policy, so the stored secret` +
+          " for it was not applied — rename the variable or drop the reference",
+      );
+    }
+  }
+
   const child = (ports.process ?? nodeProcessPort).spawn(request);
   let stderrTail = "";
   // An Agent's diagnostics are its own text, and it was started with resolved
@@ -257,9 +276,9 @@ export async function connectAgent(options: AgentConnectionOptions): Promise<Age
     pendingLine = pendingLine.slice(lastBreak + 1);
   };
   child.onStderr((chunk) => {
-    stderrTail = redactSecrets((stderrTail + chunk).slice(-STDERR_TAIL_CHARS), secretValues);
+    stderrTail = appendRedacted(stderrTail, chunk, secretValues, STDERR_TAIL_CHARS);
     if (!log) return;
-    pendingLine = redactSecrets((pendingLine + chunk).slice(-STDERR_TAIL_CHARS), secretValues);
+    pendingLine = appendRedacted(pendingLine, chunk, secretValues, STDERR_TAIL_CHARS);
     writeLines(Math.max(0, pendingLine.length - guard));
   });
   // A process that died mid-line still said something, and an Agent that writes
@@ -270,9 +289,16 @@ export async function connectAgent(options: AgentConnectionOptions): Promise<Age
   // Waits for the pipe rather than the exit: a chunk delivered after the process
   // is gone is ordinary, and flushing at the exit would hold that last line back
   // behind the guard for a flush that never came.
-  void child.stderrEnded.then(() => {
+  void child.stderrEnded.then((how) => {
     if (!log || !pendingLine.trim()) return;
-    log.log("debug", `runtime ${runtimeId} stderr: ${pendingLine.trimEnd()}`);
+    // Unguarded only where the pipe itself ended, because only then is what was
+    // said complete. Where the wait merely drained, something the Agent started
+    // still holds the descriptor and may write the rest of a value this record
+    // would have cut in half — so that much stays held back (ADR-0010).
+    const keep = how === "closed" ? 0 : redactionGuard(secretValues);
+    const upTo = pendingLine.length - keep;
+    if (upTo <= 0) return;
+    log.log("debug", `runtime ${runtimeId} stderr: ${pendingLine.slice(0, upTo).trimEnd()}`);
     pendingLine = "";
   });
 
@@ -339,7 +365,7 @@ export async function connectAgent(options: AgentConnectionOptions): Promise<Age
     // process death only speaks for itself when it was the failure we caught.
     throw error === exitFailure
       ? error
-      : stageError(runtimeId, "ACP handshake", error, exit, stderrTail);
+      : stageError(runtimeId, "ACP handshake", error, exit, stderrTail, secretValues);
   }
   log?.log(
     "info",
@@ -355,6 +381,24 @@ export async function connectAgent(options: AgentConnectionOptions): Promise<Age
     kill: (signal) => child.kill(signal),
     close,
   };
+}
+
+/**
+ * Adds a chunk to a bounded buffer of Agent diagnostics.
+ *
+ * Redacted before it is cut, never after. A cut applied first can take the head
+ * of a secret away and leave a tail that matches nothing on every later pass —
+ * so the value stays in the buffer and is printed by every failure message that
+ * quotes it (ADR-0010). What is already in the buffer was redacted on its way
+ * in, so redacting again only ever finds a value that straddles the join.
+ */
+export function appendRedacted(
+  existing: string,
+  chunk: string,
+  secrets: string[],
+  limit: number,
+): string {
+  return redactSecrets(existing + chunk, secrets).slice(-limit);
 }
 
 /** Only capabilities we can actually serve: a port is the proof of support. */
@@ -454,40 +498,3 @@ export async function withDeadline<T>(
   }
 }
 
-function describeExit(exit: AgentExit): string {
-  return exit.error
-    ? `could not be started: ${exit.error.message}`
-    : `exited with ${exit.signal ? `signal ${exit.signal}` : `code ${exit.code}`}`;
-}
-
-/** Failure message for a process that ended when we still needed it. */
-export function exitError(runtimeId: string, exit: AgentExit, stderrTail: string): Error {
-  return new Error(`runtime ${runtimeId}: agent process ${describeExit(exit)}${tailOf(stderrTail)}`, {
-    cause: exit.error,
-  });
-}
-
-/** Setup failure: which stage failed, why, and how the Agent process ended. */
-export function stageError(
-  runtimeId: string,
-  stage: string,
-  error: unknown,
-  exit: AgentExit | undefined,
-  stderrTail: string,
-): Error {
-  const ending = exit ? ` (agent process ${describeExit(exit)})` : "";
-  return new Error(
-    `runtime ${runtimeId}: ${stage} failed: ${message(error)}${ending}${tailOf(stderrTail)}`,
-    { cause: error },
-  );
-}
-
-/** Labels the Agent's own output: the buffer spans the connection, not one Turn. */
-export function tailOf(stderrTail: string): string {
-  const tail = stderrTail.trim();
-  return tail ? `\nrecent agent output:\n${tail}` : "";
-}
-
-export function message(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}

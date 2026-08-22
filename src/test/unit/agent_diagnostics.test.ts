@@ -115,15 +115,15 @@ function scriptedStderr(): {
   port: ProcessPort;
   write(chunk: string): void;
   endProcess(): void;
-  endPipe(): void;
+  endPipe(how?: "closed" | "drained"): void;
 } {
   let deliver: (chunk: string) => void = () => undefined;
   let processEnded: (exit: AgentExit) => void = () => undefined;
-  let pipeEnded: () => void = () => undefined;
+  let pipeEnded: (how: "closed" | "drained") => void = () => undefined;
   const exited = new Promise<AgentExit>((settle) => {
     processEnded = settle;
   });
-  const stderrEnded = new Promise<void>((settle) => {
+  const stderrEnded = new Promise<"closed" | "drained">((settle) => {
     pipeEnded = settle;
   });
   const port: ProcessPort = {
@@ -142,7 +142,8 @@ function scriptedStderr(): {
     port,
     write: (chunk) => deliver(chunk),
     endProcess: () => processEnded({ code: 9, signal: null }),
-    endPipe: () => pipeEnded(),
+    /** How the pipe stopped: `drained` means something may still write. */
+    endPipe: (how: "closed" | "drained" = "closed") => pipeEnded(how),
   };
 }
 
@@ -188,4 +189,163 @@ acpTest("output delivered after the process ends still reaches the log", async (
   assert.match(written, /first line/);
   // A finished process is not finished output (ARCHITECTURE.md §Client services).
   assert.match(written, /the last thing it said/);
+});
+
+test("an agent's own error text cannot carry a resolved secret into a failure", { timeout: 20_000 }, async (t: TestContext) => {
+  const secret = "sk-live-not-a-real-credential-0123456789";
+  const h = harness(t);
+  const session = await h.open({
+    launch: launchMockAgent("leak-in-error"),
+    secretEnvironment: { MOCK_SECRET: secret },
+  });
+
+  // The Agent was started with the credential in its environment, and it puts
+  // that environment into a protocol error. What it says reaches a failure
+  // message, the log and the transcript (ADR-0010).
+  await assert.rejects(session.prompt("go"), (error: Error) => {
+    assert.equal(error.message.includes(secret), false, error.message);
+    assert.match(error.message, /upstream rejected/);
+    return true;
+  });
+  assert.equal(h.logs.some((line) => line.includes(secret)), false, "the log kept it");
+});
+
+test("a refused handshake cannot carry a resolved secret either", { timeout: 20_000 }, async (t: TestContext) => {
+  const secret = "sk-live-not-a-real-credential-0123456789";
+  const h = harness(t);
+
+  // The Agent rejects `initialize` in its own words, and it was started with
+  // the credential in its environment. This failure reaches the transcript and
+  // `errorDetails`, which VS Code keeps in chat history (ADR-0010).
+  await assert.rejects(
+    h.open({
+      launch: launchMockAgent("leak-in-handshake"),
+      secretEnvironment: { MOCK_SECRET: secret },
+    }),
+    (error: Error) => {
+      assert.equal(error.message.includes(secret), false, error.message);
+      assert.match(error.message, /handshake/i);
+      return true;
+    },
+  );
+});
+
+test("a secret that collides with a policy variable is reported, not dropped in silence", { timeout: 20_000 }, async (t: TestContext) => {
+  const h = harness(t);
+
+  // Codex suppresses through CODEX_CONFIG, so a stored secret pointed at that
+  // name never reaches the agent — and a runtime that then fails to
+  // authenticate is exactly the obscure failure ADR-0010 refuses to allow.
+  const session = await h.open({
+    launch: { ...launchMockAgent(), env: { CODEX_CONFIG: "{}" } },
+    secretEnvironment: { CODEX_CONFIG: "would-have-been-a-credential" },
+  });
+
+  assert.ok(
+    h.logs.some((line) => line.includes("CODEX_CONFIG") && /not applied/.test(line)),
+    h.logs.join("\n"),
+  );
+  assert.equal(session.state, "idle");
+});
+
+test("a refused config option cannot carry a resolved secret to the caller", { timeout: 20_000 }, async (t: TestContext) => {
+  const secret = "sk-live-not-a-real-credential-0123456789";
+  const h = harness(t);
+  const session = await h.open({
+    launch: launchMockAgent("leak-in-set"),
+    secretEnvironment: { MOCK_SECRET: secret },
+  });
+
+  // `/model` and `/effort` render this straight into the transcript and into
+  // `errorDetails`, which VS Code keeps in chat history (ADR-0010).
+  await assert.rejects(session.setConfigOption("model", "mock-model-fast"), (error: Error) => {
+    assert.equal(error.message.includes(secret), false, error.message);
+    assert.match(error.message, /set refused/);
+    return true;
+  });
+});
+
+acpTest("a pipe that only drained keeps holding back what a value could straddle", async (t) => {
+  const logs: string[] = [];
+  const scripted = scriptedStderr();
+  const session = ConductorSession.open(
+    {
+      runtimeId: "scripted",
+      launch: { command: process.execPath, args: [], env: {} },
+      cwd: process.cwd(),
+      secretEnvironment: { MOCK_SECRET: LEAKED_SECRET },
+      setupTimeoutMs: 2_000,
+    },
+    { process: scripted.port, log: { log: (level, text) => logs.push(`${level} ${text}`) } },
+  );
+  const failed = session.then(() => undefined, (error: Error) => error);
+  t.after(() => void session.then((live) => live.dispose(), () => undefined));
+
+  // Half a credential, then the process is gone but something it started still
+  // holds the descriptor — which is what `drained` means. Writing this record
+  // now and the rest of the value later puts the two halves in one log file,
+  // adjacent, which is the join redaction exists to stop (ADR-0010).
+  scripted.write(`MOCK_SECRET=${LEAKED_SECRET.slice(0, 12)}`);
+  scripted.endProcess();
+  scripted.endPipe("drained");
+  await failed;
+
+  assert.equal(
+    logs.some((line) => line.includes(LEAKED_SECRET.slice(0, 12))),
+    false,
+    `half a credential was written on a drain: ${logs.join("\n")}`,
+  );
+
+  // What was held back also has to stay in the buffer, so that the rest of the
+  // value is redacted against the whole of it when it arrives. The test below
+  // is the one that asks for that.
+});
+
+acpTest("what a drain held back is joined to the rest of the value, not dropped", async (t) => {
+  const logs: string[] = [];
+  const scripted = scriptedStderr();
+  const session = ConductorSession.open(
+    {
+      runtimeId: "scripted",
+      launch: { command: process.execPath, args: [], env: {} },
+      cwd: process.cwd(),
+      secretEnvironment: { MOCK_SECRET: LEAKED_SECRET },
+      setupTimeoutMs: 2_000,
+    },
+    { process: scripted.port, log: { log: (level, text) => logs.push(`${level} ${text}`) } },
+  );
+  const failed = session.then(() => undefined, (error: Error) => error);
+  t.after(() => void session.then((live) => live.dispose(), () => undefined));
+
+  const guard = LEAKED_SECRET.length;
+  // Long enough that the drain writes a record and still holds a guard's worth
+  // back, and with no line ending in it, so nothing flushes before the drain.
+  const said = `${"-".repeat(guard + 4)}MOCK_SECRET=${LEAKED_SECRET.slice(0, 12)}`;
+  assert.equal(said.includes("\n"), false, "a line ending here would flush before the drain");
+  assert.ok(said.length > guard, "shorter than the guard and the drain writes nothing at all");
+
+  scripted.write(said);
+  scripted.endProcess();
+  scripted.endPipe("drained");
+  await failed;
+
+  // The rest of the value arrives from whatever still holds the descriptor. It
+  // is one value only because the head is still in the buffer to be redacted
+  // with it — and the newline has to fall inside the guard's window, or the
+  // joined line is held back rather than written.
+  scripted.write(`${LEAKED_SECRET.slice(12)}\n${"y".repeat(guard + 20)}`);
+
+  const written = logs
+    .filter((record) => record.includes(STDERR_MARK))
+    .map((record) => record.slice(record.indexOf(STDERR_MARK) + STDERR_MARK.length))
+    .join("\n");
+  assert.ok(
+    written.includes("MOCK_SECRET=[redacted]"),
+    `the held-back head was dropped rather than rejoined: ${written}`,
+  );
+  assert.equal(
+    logs.some((record) => record.includes(LEAKED_SECRET.slice(12))),
+    false,
+    `the rest of a credential reached the log unredacted: ${logs.join("\n")}`,
+  );
 });

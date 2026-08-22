@@ -15,12 +15,24 @@ import {
 } from "../core/index.js";
 
 const mockAgent = fileURLToPath(new URL("./mock-agent.ts", import.meta.url));
+/**
+ * Absolute, because a bare `tsx` is resolved from the child's working directory
+ * — and a Probe Session deliberately starts its Agent in a temporary directory
+ * outside this repository, where no `node_modules` is reachable.
+ */
+const typescriptLoader = import.meta.resolve("tsx");
 
 /** Mock-agent process launch spec; the command is absolute, as ACP requires. */
 export function launchMockAgent(mode?: string, extraArgs: string[] = []): LaunchSpec {
   return {
     command: process.execPath,
-    args: ["--import", "tsx", mockAgent, ...(mode ? [`--mode=${mode}`] : []), ...extraArgs],
+    args: [
+      "--import",
+      typescriptLoader,
+      mockAgent,
+      ...(mode ? [`--mode=${mode}`] : []),
+      ...extraArgs,
+    ],
     env: {},
   };
 }
@@ -29,6 +41,8 @@ export function launchMockAgent(mode?: string, extraArgs: string[] = []): Launch
 export interface SentLine {
   method?: string;
   params?: Record<string, unknown>;
+  /** An answer to something the Agent asked, which carries no method. */
+  result?: Record<string, unknown>;
 }
 
 /** Resolves as soon as the Agent sends its first Update of a turn. */

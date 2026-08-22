@@ -37,8 +37,10 @@ Code, settings keys, docs and commit messages use these words with exactly these
 | **Depth Cap** | `maxSpawnDepth`. Below it we do not inject the Shim at all. That is what stops the recursion. |
 | **Isolation** | How changes are kept apart: a `shared` working directory, or a dedicated git `worktree`. It is not a security boundary. |
 | **Probe Session** | A throwaway session the wizard opens to check authentication and discover Config Options. |
-| **Smoke Test** | A wizard step: one short prompt that proves streaming and Read-back work end to end. |
+| **Smoke Test** | A wizard step: one short prompt that proves streaming and Read-back work end to end. The Agent must answer it and nothing else; anything longer ends the connection. |
+| **Fan-out Consent** | The user's agreement that one Runtime may be handed work by an agent on another provider. Recorded against that Runtime's trust fingerprint, so it lapses exactly when the trust does. Without it, direct Sessions still work. |
 | **Registry** | The machine-readable list of ACP agents. Everything it publishes is a way to *download* an agent, never a way to launch one already installed — so we take only the exact adapter *version* from it. Validated, size-limited, cached, pinnable, optional: the built-in catalog works offline. |
 | **Facade** | An interface that exposes the Conductor to other editors (ACP-agent soon, AHP later). |
 | **Client Operation** | The key we authorize by, worked out from an ACP method and its arguments: `fs.read`, `terminal.spawn`, and so on. |
+| **Sealing** | Making an Agent's — or a repository's — own text safe to draw inside a line this Client wrote. What is removed depends on where the text lands, not on where it came from: inside a code span, the backticks and line endings that would leave it; anywhere else, the emphasis and link syntax that would let it read as ours, escaped rather than deleted so that a glob in a tool title is still the glob. A progress line is drawn as markdown too, whatever its signature suggests. Sealing is not idempotent, so text is sealed on the way out and never stored sealed. |
 | **ToolKind** | The agent's own label for a tool (`read`, `edit`, `execute`, …). Shown to the user, never used to decide anything. |

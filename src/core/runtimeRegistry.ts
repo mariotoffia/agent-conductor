@@ -1,5 +1,7 @@
 import { createHash } from "node:crypto";
 import { isAbsolute } from "node:path";
+import { customRuntimes } from "./customRuntimes.js";
+import { isPackageRunner } from "./executables.js";
 import {
   parseSuppressionPlan,
   stableJson,
@@ -26,7 +28,7 @@ import type {
 /** A catalog entry before any policy is applied. Policy is not optional on a
  *  Runtime, so the only way to have one entry and two policies is to keep the
  *  policy-free half apart. */
-type BaseRuntime = Omit<RuntimeSpec, "policy">;
+export type BaseRuntime = Omit<RuntimeSpec, "policy">;
 
 /**
  * Built-in Runtime catalog. Launch commands name an installed executable, never a
@@ -49,7 +51,9 @@ function baseRuntimes(): BaseRuntime[] {
         bin: "claude-agent-acp",
       },
       loginCommand: "claude /login",
-      detection: { binaries: ["claude"], versionArgs: ["--version"] },
+      // ADR-0010: a third-party product must not route through Free, Pro or Max
+      // credentials, and the adapter ships this switch for exactly that.
+      subscriptionAuth: { hideArgs: ["--hide-claude-auth"] },
       quirks: { processScopedConfig: false, effortReadback: true, slashCommandAllowlist: ["compact", "init", "review", "plan"] },
     },
     {
@@ -59,7 +63,6 @@ function baseRuntimes(): BaseRuntime[] {
       registryId: "codex-acp",
       adapter: { package: "@agentclientprotocol/codex-acp", version: "1.4.0", bin: "codex-acp" },
       loginCommand: "codex login",
-      detection: { binaries: ["codex"], versionArgs: ["--version"] },
       quirks: { processScopedConfig: true, effortReadback: true, slashCommandAllowlist: ["review", "plan"] },
     },
     {
@@ -68,7 +71,6 @@ function baseRuntimes(): BaseRuntime[] {
       launch: { command: "gemini", args: ["--acp"], env: {} },
       registryId: "gemini",
       loginCommand: "gemini",
-      detection: { binaries: ["gemini"], versionArgs: ["--version"] },
       quirks: { processScopedConfig: false, effortReadback: false, slashCommandAllowlist: [] },
     },
     {
@@ -77,7 +79,6 @@ function baseRuntimes(): BaseRuntime[] {
       launch: { command: "copilot", args: ["--acp", "--stdio"], env: {} },
       registryId: "github-copilot-cli",
       loginCommand: "copilot",
-      detection: { binaries: ["copilot"], versionArgs: ["--version"] },
       quirks: { processScopedConfig: true, effortReadback: false, slashCommandAllowlist: ["context", "plan", "review"] },
     },
   ];
@@ -86,61 +87,51 @@ function baseRuntimes(): BaseRuntime[] {
 /**
  * Applies one Runtime's effective policy.
  *
- * A Suppression Plan reaches its Agent through three channels and they are not
+ * A Suppression Plan reaches its Agent through three channels, and they are not
  * interchangeable: argv and the environment are launch material, so they land in
- * the launch specification the user approves and sees, while the plan itself
- * travels on the entry — its presence is what makes the Runtime eligible for Shim
- * injection later, and no amount of recorded evidence substitutes for it
- * (ADR-0008).
+ * the launch specification the user sees, while the plan itself travels on the
+ * entry — its presence is what makes the Runtime eligible for Shim injection,
+ * and no recorded evidence substitutes for it (ADR-0008).
+ *
+ * `ours`: the launch is still the catalog's own, so what the catalog knows can
+ * be applied to it. A program somebody else named keeps the recipe but not the
+ * arguments, so the approval says the switch exists and is unused (ADR-0010).
  */
-function withPolicy(base: BaseRuntime, policy: SessionPolicy, plan?: SuppressionPlan): RuntimeSpec {
-  if (!plan) return { ...base, policy };
+function withPolicy(
+  base: BaseRuntime,
+  policy: SessionPolicy,
+  plan?: SuppressionPlan,
+  ours = true,
+): RuntimeSpec {
+  // Only a Runtime with a recipe for hiding subscription authentication carries
+  // that half, so a setting about one CLI does not change the identity of every
+  // other one.
+  const effective: SessionPolicy = {
+    suppressBuiltInSubagents: policy.suppressBuiltInSubagents,
+    ...(base.subscriptionAuth
+      ? { hideSubscriptionAuth: ours && policy.hideSubscriptionAuth !== false }
+      : {}),
+  };
+  const authArgs = effective.hideSubscriptionAuth ? (base.subscriptionAuth?.hideArgs ?? []) : [];
+  // Kept as the entry had them, before anything below adds to them.
+  const baseArgs = [...base.launch.args];
+  const args = [...baseArgs, ...authArgs, ...(plan?.args ?? [])];
   return {
     ...base,
-    policy,
+    policy: effective,
+    baseArgs,
+    ...(plan ? { suppression: plan } : {}),
     launch: {
       ...base.launch,
-      args: [...base.launch.args, ...plan.args],
-      env: { ...base.launch.env, ...plan.env },
+      args,
+      ...(plan ? { env: { ...base.launch.env, ...plan.env } } : {}),
     },
-    suppression: plan,
   };
 }
 
 /** The built-in catalog under one window-wide policy. */
 export function builtinRuntimes(policy: SessionPolicy): RuntimeSpec[] {
   return baseRuntimes().map((base) => withPolicy(base, policy, suppressionPlan(base.id, policy)));
-}
-
-/**
- * Commands whose whole purpose is to fetch code and run or install it. Naming one
- * as a launch command is a mistake rather than a choice — what it downloads is
- * decided at launch time, so no fingerprint the user approved can describe it
- * (ADR-0007), and installing an Adapter is a separate exact-version wizard action.
- *
- * General-purpose runtimes (`node`, `bun`, `deno`) are deliberately absent, because
- * refusing them would refuse every locally installed agent that ships as a script.
- * They can reach the network too (`deno run https://…`), which is why the guarantee
- * does not rest here: the whole argv is fingerprinted, so a launch that fetches
- * through one of them is one the user approved by sight (ADR-0007).
- */
-const PACKAGE_RUNNERS = new Set([
-  "npx", "pnpx", "bunx", "uvx", "pipx",
-  "npm", "pnpm", "yarn", "corepack", "uv", "pip", "pip3",
-]);
-
-/** Extensions Windows appends to an executable, possibly stacked. */
-const WINDOWS_EXECUTABLE_SUFFIX = /(?:\.(?:exe|cmd|bat|ps1|com))+$/;
-
-/** The name the operating system would actually look up: Windows discards
- *  trailing dots and spaces, and an extension says nothing about what runs. */
-function commandName(command: string): string {
-  const separator = Math.max(command.lastIndexOf("/"), command.lastIndexOf("\\"));
-  return command
-    .slice(separator + 1)
-    .toLowerCase()
-    .replace(/[.\s]+$/, "")
-    .replace(WINDOWS_EXECUTABLE_SUFFIX, "");
 }
 
 /** Everything that decides what an approved Session actually runs. */
@@ -156,6 +147,10 @@ export interface LaunchIdentity {
    *  a user-supplied one is free-form data, so approving the policy would approve
    *  an unseen `_meta` payload and an unseen workspace edit along with it. */
   suppression?: SuppressionPlan;
+  /** Which variables are filled from SecretStorage and from which keys. Names
+   *  only: the values arrive per Session and never reach anything hashed,
+   *  logged or persisted (ADR-0010). */
+  secretEnvironment?: Record<string, string>;
   /** Digest of the artifact, when the host computed one. */
   digest?: string;
 }
@@ -169,7 +164,7 @@ export interface LaunchIdentity {
  * never reach something logged or persisted (ADR-0010).
  */
 export function launchFingerprint(identity: LaunchIdentity): string {
-  const { runtimeId, launch, policy, suppression, digest } = identity;
+  const { runtimeId, launch, policy, suppression, secretEnvironment, digest } = identity;
   const material = stableJson([
     runtimeId,
     launch.command,
@@ -178,6 +173,7 @@ export function launchFingerprint(identity: LaunchIdentity): string {
     policy,
     suppression ?? null,
     digest ?? null,
+    secretEnvironment ?? null,
   ]);
   return `sha256:${createHash("sha256").update(material).digest("hex")}`;
 }
@@ -193,12 +189,11 @@ export interface ResolveRuntimeOptions {
 }
 
 /**
- * Turns a catalog entry into something launchable, or refuses it.
- *
- * Resolution happens here rather than at spawn time so the wizard shows the user
- * the same executable a Session would run, and so a command that cannot be named
- * with certainty — relative to an unknown directory, absent from PATH, or a
- * package runner — is rejected before any process exists.
+ * Turns a catalog entry into something launchable, or refuses it. Here rather
+ * than at spawn time, so the wizard shows the same executable a Session would
+ * run and a command that cannot be named with certainty — relative to an unknown
+ * directory, absent from PATH, a package runner — is refused before a process
+ * exists.
  */
 export async function resolveRuntime(
   spec: RuntimeSpec,
@@ -214,7 +209,7 @@ export async function resolveRuntime(
   if (!isAbsolute(command) && /[/\\]/.test(command)) {
     throw refuse(`launch command must be absolute or a bare name, got "${command}"`);
   }
-  if (PACKAGE_RUNNERS.has(commandName(command))) {
+  if (isPackageRunner(command)) {
     throw refuse(`"${command}" fetches and runs code — install the agent, then launch it directly`);
   }
 
@@ -229,7 +224,7 @@ export async function resolveRuntime(
     throw refuse(`launch command resolved to a relative path "${found.path}"`);
   }
   // A bare name can be a symlink onto a package runner; judge what actually runs.
-  if (PACKAGE_RUNNERS.has(commandName(found.path))) {
+  if (isPackageRunner(found.path)) {
     throw refuse(`"${command}" resolves to ${found.path}, which fetches and runs code`);
   }
 
@@ -243,6 +238,7 @@ export async function resolveRuntime(
     launch,
     policy: spec.policy,
     suppression: spec.suppression,
+    ...(spec.secretEnvironment ? { secretEnvironment: spec.secretEnvironment } : {}),
     digest,
   });
   const trusted = options.trust?.fingerprint === fingerprint;
@@ -257,6 +253,8 @@ export async function resolveRuntime(
     // under a policy channel nobody approved.
     sessionMeta: spec.suppression?.sessionMeta,
     custom: spec.custom === true,
+    ...(spec.secretEnvironment ? { secretEnvironment: { ...spec.secretEnvironment } } : {}),
+    ...(spec.subscriptionAuth ? { subscriptionAuth: spec.subscriptionAuth } : {}),
     fingerprint,
     trusted,
     artifactVerified: digest !== undefined,
@@ -273,10 +271,9 @@ export async function resolveRuntime(
 }
 
 /** Whether verified suppression still describes this workspace. Most plans travel
- *  with the process, so where it runs changes nothing. One that writes into a
- *  workspace file does not: the file was written where the plan was verified and
- *  the next workspace never received it, so the same fingerprint would otherwise
- *  carry the capability into a Runtime that suppresses nothing there (ADR-0008). */
+ *  with the process, so where it runs changes nothing. One that writes a workspace
+ *  file does not: it was written where the plan was verified and the next
+ *  workspace never received it (ADR-0008). */
 function suppressionHoldsHere(spec: RuntimeSpec, options: ResolveRuntimeOptions): boolean {
   const record = options.trust?.suppression;
   // No plan means nothing was ever verifiable, whatever a settings file recorded.
@@ -303,7 +300,7 @@ export function trustedLaunch(runtime: ResolvedRuntime): LaunchSpec {
   return runtime.launch;
 }
 
-/** One entry of `agentConductor.runtimes`. An id with no built-in is a custom Runtime. */
+/** One entry of `agentConductor.runtimes`; an id with no built-in is custom. */
 export interface RuntimeOverride {
   enabled?: boolean;
   command?: string;
@@ -314,6 +311,9 @@ export interface RuntimeOverride {
    *  agent, or a built-in whose launch was replaced. Supplying one makes the
    *  Runtime eligible to be verified; it does not make it verified (ADR-0008). */
   suppression?: SuppliedSuppression;
+  /** Environment variable name to SecretStorage key. Names only; the values are
+   *  resolved per Session by the UI adapter and never come through here. */
+  secretEnvironment?: Record<string, string>;
 }
 
 export interface CatalogOptions {
@@ -327,8 +327,8 @@ export interface CatalogOptions {
   pins?: Record<string, string>;
 }
 
-/** Adapter version to install: a pin first, then the Registry, then the built-in
- *  default — so a machine that has never reached the network still has one. */
+/** Adapter version to install: a pin, then the Registry, then the built-in
+ *  default — so a machine that never reached the network still has one. */
 function pinnedAdapter(spec: RuntimeSpec, options: CatalogOptions): RuntimeSpec {
   if (!spec.adapter || !spec.registryId) return spec;
   const pin = options.pins?.[spec.registryId] ?? options.pins?.[spec.id];
@@ -347,15 +347,13 @@ function pinnedAdapter(spec: RuntimeSpec, options: CatalogOptions): RuntimeSpec 
 }
 
 /**
- * Applies one settings override.
- *
- * A Runtime whose launch the user replaced is no longer the catalog's Runtime: it
- * is marked custom and renamed, because the identity shown at the trust prompt is
- * the user's only defence against approving something under a familiar name. Its
- * Adapter stops applying too. The Suppression Plan is decided separately, by
- * `planFor`, which withholds the built-in recipe from exactly these entries.
+ * Applies one settings override. A Runtime whose launch the user replaced is no
+ * longer the catalog's: it is marked custom and renamed, because the identity at
+ * the trust prompt is the user's only defence against approving something under
+ * a familiar name, and its Adapter stops applying. The Suppression Plan is
+ * decided by `planFor`, which withholds the recipe from exactly these entries.
  */
-function overridden(spec: BaseRuntime, override?: RuntimeOverride): BaseRuntime {
+function overridden(spec: BaseRuntime, override: RuntimeOverride | undefined, replacedLaunch: boolean): BaseRuntime {
   const { command, args } = override ?? {};
   if (command === undefined && args === undefined) return spec;
   // Settings are hand-editable JSON, so this is a trust boundary rather than a
@@ -370,8 +368,10 @@ function overridden(spec: BaseRuntime, override?: RuntimeOverride): BaseRuntime 
     ...spec,
     // The suffix warns that a familiar catalog name no longer describes what runs,
     // so it belongs on a built-in only — a user-defined Runtime never claimed one.
-    ...(spec.custom ? {} : { displayName: `${spec.displayName} (custom launch)` }),
-    custom: true,
+    // Renamed and marked custom only where the launch genuinely differs: an
+    // override that repeats what the catalog already says replaces nothing.
+    ...(spec.custom || !replacedLaunch ? {} : { displayName: `${spec.displayName} (custom launch)` }),
+    custom: spec.custom === true || replacedLaunch,
     launch: {
       ...spec.launch,
       // A blank command is kept, not ignored: it resolves to a refusal that names
@@ -379,7 +379,9 @@ function overridden(spec: BaseRuntime, override?: RuntimeOverride): BaseRuntime 
       ...(command === undefined ? {} : { command }),
       ...(args === undefined ? {} : { args: [...args] }),
     },
-    ...(command === undefined ? {} : { adapter: undefined }),
+    // The Adapter describes the catalog's program, not whatever replaced it; the
+    // authentication recipe stays, so the approval can say the switch exists.
+    ...(replacedLaunch ? { adapter: undefined } : {}),
   };
 }
 
@@ -417,10 +419,20 @@ export function runtimeCatalog(options: CatalogOptions): RuntimeSpec[] {
     // environment, and the `_meta` payload. Asking for suppression cannot bring
     // back a plan that is gone, so such an entry suppresses nothing until the user
     // supplies a plan for their own launch (ADR-0008).
-    if (replaced(base, override) && !supplied) return { suppressBuiltInSubagents: false };
+    if (replaced(base, override) && !supplied) {
+      return {
+        suppressBuiltInSubagents: false,
+        ...(options.policy.hideSubscriptionAuth === undefined
+          ? {}
+          : { hideSubscriptionAuth: options.policy.hideSubscriptionAuth }),
+      };
+    }
     return {
       suppressBuiltInSubagents:
         override?.suppressBuiltInSubagents ?? options.policy.suppressBuiltInSubagents,
+      ...(options.policy.hideSubscriptionAuth === undefined
+        ? {}
+        : { hideSubscriptionAuth: options.policy.hideSubscriptionAuth }),
     };
   };
 
@@ -446,25 +458,7 @@ export function runtimeCatalog(options: CatalogOptions): RuntimeSpec[] {
     override?.suppression !== undefined && !replaced(base, override) && builtInIds.has(base.id);
 
   const builtInIds = new Set(baseRuntimes().map((base) => base.id));
-  const customBases: BaseRuntime[] = Object.entries(overrides)
-    // An entry that is not an object describes no Runtime at all. Dropping it
-    // costs one Runtime nobody can have configured; reading it empties the picker.
-    .filter(
-      ([id, override]) =>
-        !builtInIds.has(id) && override !== null && typeof override === "object" && !Array.isArray(override),
-    )
-    .map(([id, override]) => ({
-      id,
-      displayName: id,
-      // An entry with no command stays listed and fails when resolved, which
-      // names the problem far better than quietly vanishing from the picker.
-      launch: { command: override.command ?? "", args: [], env: {} },
-      detection: { binaries: override.command ? [override.command] : [], versionArgs: ["--version"] },
-      custom: true,
-      quirks: { processScopedConfig: false, effortReadback: false, slashCommandAllowlist: [] },
-    }));
-
-  return [...baseRuntimes(), ...customBases]
+  return [...baseRuntimes(), ...customRuntimes(overrides, builtInIds)]
     .filter((base) => overrides[base.id]?.enabled !== false)
     .map((base) => {
       const override = overrides[base.id];
@@ -474,11 +468,16 @@ export function runtimeCatalog(options: CatalogOptions): RuntimeSpec[] {
       const policy = policyFor(base, override, supplied.plan);
       // Override first: a replaced launch drops the Adapter, and a pin for an
       // Adapter that is no longer used must not go on disabling the Runtime.
+      const replacedLaunch = replaced(base, override);
       const spec = withPolicy(
-        overridden(base, override),
+        overridden(base, override, replacedLaunch),
         policy,
         planFor(base, policy, override, supplied.plan),
+        !replacedLaunch,
       );
+      // Carried onto the Runtime so it reaches the fingerprint and the approval
+      // prompt: it decides what the process is started with.
+      if (override?.secretEnvironment) spec.secretEnvironment = { ...override.secretEnvironment };
       return pinnedAdapter(supplied.error ? { ...spec, unavailable: supplied.error } : spec, options);
     });
 }

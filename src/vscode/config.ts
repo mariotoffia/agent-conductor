@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
-import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
-import { dirname, isAbsolute, resolve, sep } from "node:path";
+import { mkdir, readdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
+import { basename, dirname, isAbsolute, join, resolve, sep } from "node:path";
 import type * as vscode from "vscode";
 import { z } from "zod";
 import { message, redactSecrets, type EffortLevel, type StoragePort } from "../core/index.js";
@@ -47,7 +47,12 @@ export type PortsMatchVsCodeApi = [
   Assert<vscode.SecretStorage extends SecretsSource ? true : false>,
 ];
 
-const effortLevel = z.enum(["low", "medium", "high", "xhigh", "max"] as const satisfies readonly EffortLevel[]);
+/** Reasoning levels this Client understands. The wizard checks a value against
+ *  these before saving it as a default: an Agent may offer levels of its own,
+ *  and a setting that does not validate is a setting VS Code ignores. */
+export const EFFORT_LEVELS = ["low", "medium", "high", "xhigh", "max"] as const satisfies readonly EffortLevel[];
+
+const effortLevel = z.enum(EFFORT_LEVELS);
 
 /** Shell-safe environment variable name. */
 const ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
@@ -80,7 +85,14 @@ const CREDENTIAL_SHAPES = [
 ];
 
 export function isSecretReference(value: string): boolean {
-  return SECRET_REFERENCE.test(value) && !CREDENTIAL_SHAPES.some((shape) => shape.test(value));
+  return SECRET_REFERENCE.test(value) && !looksLikeCredential(value);
+}
+
+/** Whether a value is recognisably a credential. The same tripwire either way:
+ *  a Suppression Plan's environment is written in the same settings file, which
+ *  syncs and is often committed, and a plan value is never a secret (ADR-0010). */
+export function looksLikeCredential(value: string): boolean {
+  return CREDENTIAL_SHAPES.some((shape) => shape.test(value));
 }
 
 const secretReference = z
@@ -90,7 +102,12 @@ const secretReference = z
 const suppressionSetting = z
   .object({
     args: z.array(z.string()).optional(),
-    env: z.record(z.string().regex(ENV_NAME), z.string()).optional(),
+    env: z
+      .record(
+        z.string().regex(ENV_NAME),
+        z.string().refine((value) => !looksLikeCredential(value), "must not be a credential"),
+      )
+      .optional(),
     sessionMeta: z.record(z.unknown()).optional(),
     workspaceSettings: z
       .object({ file: z.string().min(1), merge: z.record(z.unknown()) })
@@ -386,6 +403,36 @@ export async function resolveSecretEnvironment(
  * the previous content rather than half of the new one. That holds on one
  * filesystem, which is where the temporary file is put.
  */
+/**
+ * How old a scratch file must be before it is nobody's.
+ *
+ * By age rather than by name: the name is deliberately unique per write, and
+ * another writer's in-flight file matches the same pattern. Two windows can
+ * share one storage directory, so "mine" is not something a sweep can tell —
+ * but nothing in flight is an hour old.
+ */
+const STALE_SCRATCH_MS = 60 * 60 * 1000;
+
+/** Scratch files an earlier write never renamed. Failures are ignored: this is
+ *  tidying, and a write that still succeeds is the point. */
+async function removeStale(directory: string, name: string): Promise<void> {
+  try {
+    const entries = await readdir(directory);
+    const abandoned = entries.filter((entry) => entry.startsWith(`${name}.`) && entry.endsWith(".tmp"));
+    await Promise.all(
+      abandoned.map(async (entry) => {
+        const scratch = join(directory, entry);
+        const details = await stat(scratch).catch(() => undefined);
+        if (details && Date.now() - details.mtimeMs > STALE_SCRATCH_MS) {
+          await rm(scratch, { force: true });
+        }
+      }),
+    );
+  } catch {
+    // Nothing to tidy, or nothing we may tidy.
+  }
+}
+
 export function fileStorage(directory: string): StoragePort {
   const pathOf = (key: string): string => {
     if (isAbsolute(key)) return key;
@@ -409,10 +456,14 @@ export function fileStorage(directory: string): StoragePort {
     async writeAtomic(key, value) {
       const target = pathOf(key);
       await mkdir(dirname(target), { recursive: true });
+      // A host killed between the write and the rename leaves its scratch file
+      // behind, and nothing else ever looks at one. Cleared here rather than on
+      // a timer: this is the only code that makes them.
+      await removeStale(dirname(target), basename(target));
       // Unique per write, not per process: two writes to one name in flight
-              // together would otherwise rename the same scratch file twice, and
-              // the loser would report a failure that never happened.
-              const temporary = `${target}.${randomUUID()}.tmp`;
+      // together would otherwise rename the same scratch file twice, and the
+      // loser would report a failure that never happened.
+      const temporary = `${target}.${randomUUID()}.tmp`;
       try {
         await writeFile(temporary, value, "utf8");
         await rename(temporary, target);

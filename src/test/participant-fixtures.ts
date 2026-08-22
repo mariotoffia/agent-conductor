@@ -9,11 +9,8 @@ import {
 } from "../core/index.js";
 import { DiffDocuments } from "../vscode/diffDocs.js";
 import type { ChatCommand } from "../vscode/chatSink.js";
-import {
-  ConductorParticipant,
-  openTrustedSession,
-  type RuntimeChoice,
-} from "../vscode/participant.js";
+import { ConductorParticipant, type RuntimeChoice } from "../vscode/participant.js";
+import { openTrustedSession } from "../vscode/spawnGate.js";
 import type { QuickItem } from "../vscode/elicitation.js";
 import { launchMockAgent, recordingProcessPort } from "./acp-harness.js";
 
@@ -33,13 +30,12 @@ export function mockRuntime(mode?: string): RuntimeSpec {
     id: "mock",
     displayName: "Mock Agent",
     launch: launchMockAgent(mode),
-    detection: { binaries: [process.execPath], versionArgs: ["--version"] },
     policy: { suppressBuiltInSubagents: false },
     quirks: { processScopedConfig: false, effortReadback: true, slashCommandAllowlist: [] },
   };
 }
 
-const executable: ExecutablePort = {
+export const executable: ExecutablePort = {
   async resolve(command) {
     return command === process.execPath ? { path: process.execPath } : undefined;
   },
@@ -165,6 +161,7 @@ export function participantOn(t: TestContext, spec: RuntimeSpec, overrides: { tr
     defaultRuntimeId: () => spec.id,
     showThinking: () => thinking,
     runtimes: async (): Promise<RuntimeChoice[]> => [{ id: spec.id, label: spec.displayName }],
+    runtimeQuirks: () => spec.quirks,
     pick: async (items) => {
       offered.push([...items]);
       notePickOffered();

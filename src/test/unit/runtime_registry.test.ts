@@ -8,6 +8,7 @@ import {
   runtimeCatalog,
   type RuntimeSpec,
 } from "../../core/index.js";
+import { MAX_SHOWN_NAME_CHARS } from "../../core/customRuntimes.js";
 import { executables, installed, policy, registryText, spec, storage } from "../runtime-fixtures.js";
 
 test("a bare command resolves to the canonical absolute executable", async () => {
@@ -350,4 +351,71 @@ test("installing an adapter refuses a package name that is not one", () => {
     );
   }
   assert.ok(adapterInstallCommand({ package: "@scope/pkg", version: "1.2.3", bin: "p" }).args.length);
+});
+
+test("a runtime id that names an Object prototype member does not take the catalog down", () => {
+  // Settings keys are arbitrary strings, and the plan lookup is an index into a
+  // plain object. Refuse the one Runtime, never throw the catalog away.
+  for (const id of ["constructor", "toString", "valueOf", "__proto__", "hasOwnProperty"]) {
+    const catalog = runtimeCatalog({
+      policy: { suppressBuiltInSubagents: true },
+      overrides: { [id]: { command: "/opt/bin/agent" } },
+    });
+
+    assert.ok(
+      catalog.some((runtime) => runtime.id === "claude"),
+      `an id of "${id}" emptied the catalog`,
+    );
+    const entry = catalog.find((runtime) => runtime.id === id);
+    assert.equal(entry?.suppression, undefined, `"${id}" was given a built-in plan`);
+  }
+});
+
+test("a custom runtime cannot take a built-in's name by spelling its key differently", () => {
+  // `agentConductor.runtimes` is a scope a repository writes, and the name it
+  // supplies leads the dialog that approves the launch. A key that reads as a
+  // built-in once whitespace is normalised must not present as one (ADR-0007).
+  const catalog = runtimeCatalog({
+    policy,
+    overrides: { "Claude  Code": { command: "/tmp/not-claude" } },
+  });
+
+  const names = catalog.map((spec) => spec.displayName);
+  assert.equal(
+    new Set(names).size,
+    names.length,
+    `two runtimes present under one name: ${names.join(" | ")}`,
+  );
+});
+
+test("the mark on a custom runtime survives being shown", () => {
+  // Padded past what a dialog shows, with characters `\s` does not cover, so
+  // that a clamp from the right takes the mark and leaves the familiar name —
+  // and ending with an override that would draw what follows it backwards.
+  const padded = `Claude Code ${"\u200b".repeat(70)}\u202e`;
+  // And padded with characters that are plainly visible, which flattening keeps.
+  const long = `Claude Code ${"x".repeat(200)}`;
+  const both = runtimeCatalog({
+    policy,
+    overrides: { [padded]: { command: "/tmp/a" }, [long]: { command: "/tmp/b" } },
+  });
+
+  for (const custom of both.filter((spec) => spec.custom)) {
+    assert.ok(
+      custom.displayName.length <= MAX_SHOWN_NAME_CHARS,
+      `${custom.displayName.length} characters will be cut before the mark: ${custom.displayName}`,
+    );
+    assert.match(custom.displayName, /\(custom\)$/);
+    // And no formatting character in it: those take up characters but no width,
+    // and one of them draws what follows it backwards — so a mark that the
+    // length above says is present can still be unreadable. Padding that is
+    // merely blank but has width is not covered here; it cannot take the mark,
+    // because the mark is added after the cut.
+    assert.equal(
+      /\p{Cf}/u.test(custom.displayName),
+      false,
+      `a formatting character survived: ${JSON.stringify(custom.displayName)}`,
+    );
+  }
+  assert.equal(both.filter((spec) => spec.custom).length, 2, "a custom runtime was dropped");
 });

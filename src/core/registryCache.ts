@@ -1,4 +1,6 @@
 import { z } from "zod";
+import { message } from "./failures.js";
+import { plainText } from "./sealText.js";
 import type { AdapterPackage, StoragePort } from "./types.js";
 
 /**
@@ -56,7 +58,11 @@ const EXACT_VERSION = /^(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)(?:[-+][0-
 /** The published document is tens of kilobytes. This bounds what a hostile or
  *  broken response can make the extension parse and hold — applied both when a
  *  document arrives and when a cached one is read back at startup. */
-const MAX_REGISTRY_TEXT = 4 * 1024 * 1024;
+export const MAX_REGISTRY_TEXT = 4 * 1024 * 1024;
+
+/** How long a Registry request may take. The built-in catalog is the fallback,
+ *  so waiting longer buys nothing a user watching a progress notification wants. */
+export const REGISTRY_TIMEOUT_MS = 10_000;
 
 export function isExactVersion(version: string): boolean {
   return EXACT_VERSION.test(version);
@@ -150,6 +156,102 @@ export function registryAdapterVersion(
   if (at <= 0 || distributed.slice(0, at) !== packageName) return undefined;
   const version = distributed.slice(at + 1);
   return isExactVersion(version) ? version : undefined;
+}
+
+/** Fetches a Registry document. Replaceable so a test never needs the network. */
+export type FetchText = (url: string) => Promise<string>;
+
+/** What a refresh left the extension with, and what to say about it. */
+export interface RegistryRefresh {
+  /** The snapshot to use now: the fresh one, or the cached copy it fell back
+   *  to. Absent means neither exists and the built-in catalog is all there is. */
+  snapshot?: RegistrySnapshot;
+  /** Why the refresh did not happen, in words a notification can show. Absent
+   *  when the document really was refreshed. */
+  problem?: string;
+}
+
+/**
+ * Refreshes the cached Registry, falling back visibly.
+ *
+ * Nothing here throws, because nothing here is essential: the built-in catalog
+ * launches every Runtime offline, and the Registry only supplies exact Adapter
+ * versions. What matters is that a failure is *said* rather than swallowed — an
+ * extension that quietly serves a month-old document looks identical to one
+ * that just refreshed (ARCHITECTURE.md §Runtime catalog).
+ *
+ * The previous cache survives every failure, including a document that does not
+ * validate: it is the copy the user is offline with.
+ */
+export async function refreshRegistry(
+  storage: StoragePort,
+  url: string,
+  now: number,
+  options: { fetchText?: FetchText; ttlMs?: number } = {},
+): Promise<RegistryRefresh> {
+  try {
+    return { snapshot: await cacheRegistry(storage, await (options.fetchText ?? fetchText)(url), now) };
+  } catch (error) {
+    const cached = await readCachedRegistry(storage, now, options.ttlMs);
+    return { ...(cached ? { snapshot: cached } : {}), problem: message(error) };
+  }
+}
+
+/** The registry over HTTP, bounded in both time and size — it is a remote
+ *  document, and the extension host is what would hold an unbounded one. */
+const fetchText: FetchText = async (url) => {
+  const response = await fetch(url, { signal: AbortSignal.timeout(REGISTRY_TIMEOUT_MS) });
+  if (!response.ok) {
+    throw new Error(`registry answered ${response.status} ${response.statusText}`);
+  }
+  // A declared length is a chance to refuse before reading anything. It is in
+  // bytes and the cap is in characters, which for this document differ only in
+  // the safe direction: no encoding produces fewer bytes than characters.
+  const declared = Number(response.headers.get("content-length"));
+  if (Number.isFinite(declared) && declared > MAX_REGISTRY_TEXT) {
+    throw new Error(`registry document is too large: ${declared} bytes`);
+  }
+  return readBounded(response.body, MAX_REGISTRY_TEXT);
+};
+
+/** Reads a response body, stopping at the cap rather than after it: a server
+ *  that under-declares its length must not decide how much memory this costs. */
+async function readBounded(body: ReadableStream<Uint8Array> | null, limit: number): Promise<string> {
+  if (!body) return "";
+  const decoder = new TextDecoder();
+  const reader = body.getReader();
+  let text = "";
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) return text + decoder.decode();
+      text += decoder.decode(value, { stream: true });
+      if (text.length > limit) {
+        throw new Error(`registry document is too large: over ${limit} characters`);
+      }
+    }
+  } finally {
+    await reader.cancel().catch(() => undefined);
+  }
+}
+
+/** What a refresh leaves the user with. A stale or missing snapshot is said out
+ *  loud: quietly serving a month-old document looks like a fresh refresh. */
+export function describeRefresh(result: RegistryRefresh): string {
+  const agents = result.snapshot?.document.agents.length ?? 0;
+  if (!result.problem) return `ACP agent registry refreshed — ${agents} agents.`;
+  // What went wrong carries the host's own words — a reason phrase it chose, a
+  // snippet of the document it served — and this line is shown in a
+  // notification, where a link is something to click (ADR-0007).
+  const problem = plainText(result.problem);
+  if (!result.snapshot) {
+    return `The ACP agent registry is unavailable (${problem}); the built-in catalog is in use.`;
+  }
+  const cached = new Date(result.snapshot.fetchedAt).toISOString();
+  return (
+    `The ACP agent registry is unavailable (${problem});` +
+    ` using the copy cached ${cached}${result.snapshot.stale ? " (stale)" : ""}.`
+  );
 }
 
 /** An npm package name, optionally scoped. Checked because the name becomes an

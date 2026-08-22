@@ -5,22 +5,16 @@ import {
   message,
   pickEffortChoices,
   pickModelChoices,
-  resolveRuntime,
-  trustedLaunch,
-  type ConfigChoice,
-  type ExecutablePort,
   type LogPort,
   type ModelHint,
-  type RuntimeSpec,
-  type RuntimeTrust,
-  type SessionPorts,
-  type SessionSpec,
+  type RuntimeQuirks,
 } from "../core/index.js";
 import { ChatSink, readBackLine, type ChatStream } from "./chatSink.js";
 import type { DiffDocuments } from "./diffDocs.js";
-import type { FormHost, QuickItem } from "./elicitation.js";
-import { clampForDisplay, MAX_LABEL_CHARS, type Assert } from "./permissions.js";
+import { asQuickItem, type FormHost, type QuickItem } from "./elicitation.js";
+import { clampForDisplay, MAX_DETAIL_CHARS, MAX_LABEL_CHARS, type Assert } from "./permissions.js";
 import { renderUpdate } from "./render.js";
+import { inlineText, plainText } from "./sealing.js";
 
 /**
  * `@conductor`: one chat turn driving one direct Session (ARCHITECTURE.md
@@ -55,66 +49,6 @@ export type TurnResult = {
 };
 
 // ---------------------------------------------------------------------------
-// The spawn gate
-// ---------------------------------------------------------------------------
-
-export interface TrustedSessionRequest {
-  spec: RuntimeSpec;
-  executable: ExecutablePort;
-  /** What the user approved for this Runtime, if anything. */
-  trust?: RuntimeTrust;
-  /** `vscode.workspace.isTrusted`. */
-  workspaceTrusted: boolean;
-  /** Absolute session working directory. */
-  cwd: string;
-  additionalDirectories?: string[];
-  secretEnvironment?: Record<string, string>;
-  requestedModel?: string;
-  requestedEffort?: string;
-  onUpdate: (notification: acp.SessionNotification) => void;
-  ports: SessionPorts;
-}
-
-/**
- * The only way this layer starts an Agent.
- *
- * Two gates, in this order: the window's trust, then the Runtime's. Workspace
- * trust comes first because a repository nobody vouched for must not even get to
- * name a Runtime, and Runtime Trust is re-derived from a fresh resolution rather
- * than read from a record — an executable that moved or changed is a different
- * identity, and fails closed here (ADR-0007).
- */
-export async function openTrustedSession(request: TrustedSessionRequest): Promise<ConductorSession> {
-  if (!request.workspaceTrusted) {
-    throw new Error(
-      `runtime ${request.spec.id}: this workspace is not trusted, and agents execute code` +
-        " — trust the workspace before starting a session",
-    );
-  }
-  const runtime = await resolveRuntime(request.spec, {
-    executable: request.executable,
-    ...(request.trust ? { trust: request.trust } : {}),
-    workspace: request.cwd,
-  });
-  const spec: SessionSpec = {
-    runtimeId: runtime.id,
-    launch: trustedLaunch(runtime),
-    cwd: request.cwd,
-    // Taken from the resolved Runtime, so the policy channel is the one the
-    // fingerprint covers rather than one a caller composed (ADR-0004).
-    ...(runtime.sessionMeta ? { sessionMeta: runtime.sessionMeta } : {}),
-    ...(request.additionalDirectories?.length
-      ? { additionalDirectories: request.additionalDirectories }
-      : {}),
-    ...(request.secretEnvironment ? { secretEnvironment: request.secretEnvironment } : {}),
-    ...(request.requestedModel ? { requestedModel: request.requestedModel } : {}),
-    ...(request.requestedEffort ? { requestedEffort: request.requestedEffort } : {}),
-    onUpdate: request.onUpdate,
-  };
-  return ConductorSession.open(spec, request.ports);
-}
-
-// ---------------------------------------------------------------------------
 // The participant
 // ---------------------------------------------------------------------------
 
@@ -138,8 +72,13 @@ export interface ParticipantOptions {
   diffs: DiffDocuments;
   /** `agentConductor.ui.showThinking`, read per turn. */
   showThinking(): boolean;
+  /** `agentConductor.ui.slashCommandAllowlist`, read per turn. */
+  slashCommands?(): readonly string[];
   /** Picker fallback for a Runtime whose Agent exposes no Config Option. */
   modelCatalog?(runtimeId: string): ModelHint[];
+  /** Traits of the Runtime behind a Session, for telling the user why there is
+   *  nothing to set. Absent leaves the message the weaker of the two. */
+  runtimeQuirks?(runtimeId: string): RuntimeQuirks | undefined;
   log?: LogPort;
 }
 
@@ -213,7 +152,7 @@ export class ConductorParticipant {
           return await this.#prompt(request.prompt, stream, token);
       }
     } catch (error) {
-      const text = message(error);
+      const text = failureText(error);
       stream.markdown(`\n\n**Agent Conductor refused this turn.** ${text}`);
       return { metadata: { stopReason: REFUSED }, errorDetails: { message: text } };
     } finally {
@@ -285,6 +224,12 @@ export class ConductorParticipant {
       diffs: this.#options.diffs,
       sessionId: session.sessionId,
       showThinking: this.#options.showThinking(),
+      // The user's list together with what the catalog knows this CLI can be
+      // asked safely: both are allowlists of commands safe to surface.
+      slashCommands: [
+        ...(this.#options.slashCommands?.() ?? []),
+        ...(this.#options.runtimeQuirks?.(session.runtimeId)?.slashCommandAllowlist ?? []),
+      ],
       toolTitles: this.#toolTitles,
       ...(this.#options.log ? { log: this.#options.log } : {}),
     });
@@ -294,7 +239,7 @@ export class ConductorParticipant {
       const response = await session.prompt(prompt);
       return { metadata: { stopReason: response.stopReason } };
     } catch (error) {
-      const text = message(error);
+      const text = failureText(error);
       stream.markdown(`\n\n**The turn failed.** ${text}`);
       return { metadata: { stopReason: "failed" }, errorDetails: { message: text } };
     } finally {
@@ -349,7 +294,7 @@ export class ConductorParticipant {
     }
     await this.dispose();
     this.#runtimeId = picked.id;
-    stream.markdown(`Next turn will run on **${clampForDisplay(picked.label, MAX_LABEL_CHARS)}**.`);
+    stream.markdown(`Next turn will run on **${inlineText(picked.label, MAX_LABEL_CHARS)}**.`);
     return { metadata: { stopReason: DONE } };
   }
 
@@ -369,7 +314,7 @@ export class ConductorParticipant {
       ? pickModelChoices(config, catalog)
       : pickEffortChoices(config, catalog.find((hint) => hint.id === config.model?.currentValue));
     if (source.choices.length === 0) {
-      stream.markdown(`This agent exposes no ${slot} to choose from.`);
+      stream.markdown(this.#nothingToSet(session.runtimeId, slot));
       return { metadata: { stopReason: DONE } };
     }
     const picked = await this.#choose(source.choices, asQuickItem, {
@@ -382,10 +327,7 @@ export class ConductorParticipant {
     }
     const selector = slot === "model" ? config.model : config.effort;
     if (!selector) {
-      stream.markdown(
-        `This runtime fixes its ${slot} when the process starts;` +
-          " reconnect it with the value you want.",
-      );
+      stream.markdown(this.#nothingToSet(session.runtimeId, slot));
       return { metadata: { stopReason: DONE } };
     }
     await session.setConfigOption(selector.id, picked.value);
@@ -393,6 +335,21 @@ export class ConductorParticipant {
       readBackLine(slot, slot === "model" ? session.modelSelection : session.effortSelection),
     );
     return { metadata: { stopReason: DONE } };
+  }
+
+  /**
+   * Why there is nothing to set, told apart rather than guessed at.
+   *
+   * A Runtime whose configuration is fixed when its process starts has to be
+   * reconnected with the value the user wants; an Agent that merely reports no
+   * options right now might report some later, and sending that user off to
+   * reconnect something that is fine is the wrong answer (ADR-0005).
+   */
+  #nothingToSet(runtimeId: string, slot: string): string {
+    return this.#options.runtimeQuirks?.(runtimeId)?.processScopedConfig === true
+      ? `This runtime fixes its ${slot} when the process starts;` +
+          " reconnect it with the value you want."
+      : `This agent exposes no ${slot} to choose from.`;
   }
 
   /**
@@ -450,7 +407,11 @@ export class ConductorParticipant {
   async #openSession(stream: ChatStream): Promise<ConductorSession> {
     const generation = this.#generation;
     const runtimeId = this.#runtimeId ?? this.#options.defaultRuntimeId();
-    stream.progress(`Starting ${clampForDisplay(runtimeId, MAX_LABEL_CHARS)}…`);
+    // A Runtime id is a settings key, and `agentConductor.runtimes` is a scope a
+    // repository can write — so this is its text, drawn before anything about it
+    // has been trusted (ADR-0007). Sealed like any other, and a progress line is
+    // rendered as markdown whatever its signature suggests.
+    stream.progress(`Starting ${inlineText(runtimeId, MAX_LABEL_CHARS)}…`);
     const session = await this.#options.open(runtimeId, (notification) => this.#onUpdate(notification));
     if (generation !== this.#generation) {
       await session.dispose();
@@ -474,11 +435,28 @@ export class ConductorParticipant {
   }
 }
 
-function asQuickItem(choice: ConfigChoice): QuickItem {
-  return {
-    label: clampForDisplay(choice.group ? `${choice.group} · ${choice.label}` : choice.label, MAX_LABEL_CHARS),
-    description: choice.value,
-  };
+/**
+ * A failure, as it may be drawn.
+ *
+ * Most of what these say is the Agent's own text, written straight after words
+ * this Client put in bold. So it is bounded, kept to one line, and stripped of
+ * the markers that make text look like ours: an Agent answering with a rule and
+ * a heading of its own would otherwise appear to be us (ADR-0007).
+ */
+function failureText(error: unknown): string {
+  // An `_` between two word characters is kept, and every other one goes. These
+  // messages name environment variables, settings keys and paths, and one drawn
+  // as `MOCKSECRET` sends the reader looking for something that does not exist —
+  // while `_Now running:_` is how this Client writes its own asides, and an
+  // Agent's words are drawn straight after our bold. Markdown cannot emphasise
+  // an underscore inside a word, so keeping those costs nothing. Flattening
+  // already defeats every block-level construct, since the text is appended
+  // mid-line. Links go through the one rule there is — see `sealing.ts`.
+  // The underscores go first, and everything else is the one sealing there is.
+  // First, because removing a character can put a link back together — `http:_//`
+  // is not an address until the `_` is gone — and `plainText` breaks links last.
+  const said = message(error).replace(/(?<![A-Za-z0-9])_+|_+(?![A-Za-z0-9])/g, "");
+  return clampForDisplay(plainText(said).trim(), MAX_DETAIL_CHARS);
 }
 
 /** The chat ports still are the VS Code API they stand for; see `config.ts`. */

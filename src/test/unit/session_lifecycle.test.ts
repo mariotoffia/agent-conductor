@@ -274,3 +274,131 @@ test("a disposal that fails is neither unhandled nor permanent", async (t) => {
   assert.ok(failures.length > 0, "the disposal never tried to stop the process");
   assert.equal(session.state, "disposed");
 });
+
+/**
+ * A Session owns the commands its Agent started, not just the Agent (ADR-0008).
+ *
+ * The terminal port spawns those in their own process group precisely so that
+ * ending a Session ends them too; without disposal here they outlive the Agent,
+ * the Session, and the extension host that spawned them.
+ */
+
+sessionTest("disposing a session ends the commands its agent started", async (t) => {
+  let disposed = 0;
+  const h = harness(t, {
+    terminal: {
+      createTerminal: async () => ({ terminalId: "t1" }),
+      terminalOutput: async () => ({ output: "", truncated: false }),
+      waitForTerminalExit: async () => ({}),
+      killTerminal: async () => undefined,
+      releaseTerminal: async () => undefined,
+      dispose: () => {
+        disposed += 1;
+      },
+    },
+  });
+  const session = await h.open();
+
+  await session.dispose();
+
+  assert.equal(disposed, 1, "the terminal port was never told the session ended");
+});
+
+sessionTest("teardown terminates the agent without waiting on the terminal port", async (t) => {
+  const h = harness(t, {
+    terminal: {
+      createTerminal: async () => ({ terminalId: "t1" }),
+      terminalOutput: async () => ({ output: "", truncated: false }),
+      waitForTerminalExit: async () => ({}),
+      killTerminal: async () => undefined,
+      releaseTerminal: async () => undefined,
+      // A host service that never finishes. Ending the Agent must not queue
+      // behind it: the escalation to SIGKILL is armed by closing the connection.
+      dispose: () => new Promise<void>(() => undefined),
+    },
+  });
+  const session = await h.open({ launch: launchMockAgent(undefined, ["--ignore-sigterm"]) });
+
+  void session.dispose();
+
+  await h.clock.armed(1);
+  assert.equal(h.clock.pending().length, 1, "teardown must arm an escalation regardless");
+  h.clock.fire();
+  assert.equal((await session.exited).signal, "SIGKILL");
+});
+
+sessionTest("a terminal port that throws on disposal does not fail the teardown", async (t) => {
+  const h = harness(t, {
+    terminal: {
+      createTerminal: async () => ({ terminalId: "t1" }),
+      terminalOutput: async () => ({ output: "", truncated: false }),
+      waitForTerminalExit: async () => ({}),
+      killTerminal: async () => undefined,
+      releaseTerminal: async () => undefined,
+      dispose: () => {
+        throw new Error("could not signal the process group");
+      },
+    },
+  });
+  const session = await h.open();
+
+  // Disposal is memoized and awaited by the extension's own teardown; a
+  // rejection here would be remembered and re-thrown at every later teardown.
+  await session.dispose();
+
+  assert.ok(h.logs.some((line) => /could not signal/.test(line)), h.logs.join("\n"));
+});
+
+sessionTest("a prompt response that is not one fails the turn, not the reader", async (t) => {
+  const h = harness(t);
+  const session = await h.open({ launch: launchMockAgent("bad-prompt-response") });
+
+  // The SDK schema-checks notifications, not the answers to requests we send,
+  // and the Agent is not trusted (ADR-0007). A turn that cannot be read has
+  // failed; nothing downstream should meet a stop reason that is not a string.
+  await assert.rejects(session.prompt("go"), /stop reason/i);
+  assert.notEqual(session.state, "prompting");
+});
+
+sessionTest("an agent that dies takes the commands it started with it", async (t) => {
+  let disposed = 0;
+  const h = harness(t, {
+    terminal: {
+      createTerminal: async () => ({ terminalId: "t1" }),
+      terminalOutput: async () => ({ output: "", truncated: false }),
+      waitForTerminalExit: async () => ({}),
+      killTerminal: async () => undefined,
+      releaseTerminal: async () => undefined,
+      dispose: () => {
+        disposed += 1;
+      },
+    },
+  });
+  const session = await h.open();
+
+  // Nothing may reach this Session again — the user can close the window — so
+  // what it started cannot wait for a next turn to be cleaned up (ADR-0008).
+  h.children[0]?.kill("SIGKILL");
+  await session.exited;
+  // The exit handler runs on the process's own event, so wait for the effect
+  // rather than assuming it has already happened.
+  const deadline = Date.now() + 5_000;
+  while (disposed === 0 && Date.now() < deadline) {
+    await new Promise((wake) => setTimeout(wake, 10));
+  }
+
+  assert.ok(disposed > 0, "a crashed agent left its commands running");
+});
+
+sessionTest("an agent that dies while it is being configured fails the session start", async (t) => {
+  const h = harness(t);
+
+  // A refused option leaves a usable Session and a death does not, and the
+  // callback that reports both cannot tell them apart. Resolving here would hand
+  // back a Session whose process is gone, and whose first Turn says only that it
+  // is failed — rather than what the exit status and the stderr say (ADR-0008).
+  await assert.rejects(
+    h.open({ launch: launchMockAgent("die-in-set"), requestedEffort: "low" }),
+    /session setup failed|agent process exited with code 3/,
+  );
+});

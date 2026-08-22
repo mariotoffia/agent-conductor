@@ -2,48 +2,37 @@ import * as acp from "@agentclientprotocol/sdk";
 import {
   connectAgent,
   DEFAULT_SETUP_TIMEOUT_MS,
-  exitError,
-  message,
-  stageError,
   systemClock,
-  tailOf,
   withDeadline,
   type AgentConnection,
 } from "./acpClient.js";
+import { additionalDirectories } from "./sessionRoots.js";
+import { message, stageError, stallError, turnError } from "./failures.js";
 import {
+  applyRequestedSelections,
   asConfigOptions,
   discoverConfig,
   readBack,
   selectorSlot,
   type DiscoveredConfig,
 } from "./discovery.js";
-import { sortMcpServers, validateSessionSpec, type SessionSpec } from "./sessionSpec.js";
-import type { AgentExit, ClockPort, EffectiveSelection, LogLevel, SessionPorts } from "./types.js";
-
-/** Lifecycle of one Session. A Session never leaves `disposed` or `failed`. */
-export type SessionState =
-  | "idle"
-  | "configuring"
-  | "prompting"
-  | "cancelling"
-  | "failed"
-  | "disposed";
-
-/** How long a cancelled turn may keep running before its process is terminated. */
-export const DEFAULT_CANCEL_GRACE_MS = 5_000;
-/**
- * How long a Turn may go without any Agent activity before the Client ends it.
- * Generous on purpose: an Agent running a long tool inside its own harness is
- * silent on the wire, and ending such a Turn early would destroy real work.
- */
-export const DEFAULT_STALL_TIMEOUT_MS = 600_000;
+import { redactSecrets } from "./redaction.js";
+import {
+  DEFAULT_CANCEL_GRACE_MS,
+  DEFAULT_STALL_TIMEOUT_MS,
+  sortMcpServers,
+  validateSessionSpec,
+  type SessionSpec,
+} from "./sessionSpec.js";
+import type {
+  AgentExit, ClockPort, EffectiveSelection, LogLevel, SessionPorts, SessionState,
+} from "./types.js";
 
 /**
- * One ACP session on one Agent process (ADR-0008).
- *
- * The Session owns its subprocess for its whole life, so a cancellation that
- * escalates to termination — or an Agent crash — can only ever affect this
- * Session. Cancellation is two-layered: `session/cancel`, then the process.
+ * One ACP session on one Agent process (ADR-0008). It owns that subprocess for
+ * its whole life, so a cancellation that escalates to termination — or an Agent
+ * crash — can only ever affect this Session. Cancellation is two-layered:
+ * `session/cancel`, then the process.
  */
 export class ConductorSession {
   readonly #spec: SessionSpec;
@@ -85,12 +74,8 @@ export class ConductorSession {
     return session;
   }
 
-  /**
-   * Spawns the Agent and reattaches to a previous session (`session/load`) —
-   * ACP's separate `session/resume` method is not used.
-   * MCP servers are always re-sent; supported additional roots are re-sent too.
-   * Fails closed when the Agent does not advertise `loadSession`.
-   */
+  /** Reattaches to a previous session (`session/load`); `session/resume` is not
+   *  used. Servers and roots are re-sent; needs the `loadSession` capability. */
   static async load(
     spec: SessionSpec & { sessionId: string },
     ports: SessionPorts = {},
@@ -117,14 +102,10 @@ export class ConductorSession {
     return this.#requireConnection().handshake;
   }
 
-  /**
-   * Latest complete Config Option array reported by the Agent (ADR-0005).
-   *
-   * ponytail: handed out by reference. Harmless while only `config` and tests
-   * read it — a caller that mutates or retains it would be our own code, not
-   * the untrusted Agent this Session guards against. Copy on the way out once
-   * view code consumes it directly.
-   */
+  /** Latest complete Config Option array reported by the Agent (ADR-0005).
+   *  ponytail: handed out by reference — harmless while only `config` and tests
+   *  read it, and it is replaced wholesale rather than edited. Copy on the way
+   *  out once view code consumes it directly. */
   get configOptions(): acp.SessionConfigOption[] {
     return this.#configOptions;
   }
@@ -143,14 +124,10 @@ export class ConductorSession {
     return readBack(this.config.effort, this.#requestedEffort);
   }
 
-  /**
-   * Sets one Config Option and adopts the complete array the Agent answers with.
-   *
-   * Only between Turns: a Runtime that applies the change to the Turn already in
-   * flight would silently rewrite the configuration that Turn started under.
-   * Boolean options are not settable — the Client does not advertise the boolean
-   * Config Option capability, so it must not send boolean values either.
-   */
+  /** Sets one Config Option and adopts the complete array the Agent answers
+   *  with. Only between Turns: applying a change to the Turn already in flight
+   *  would silently rewrite what it started under. Booleans are not settable —
+   *  the Client does not advertise that capability, so it must not send them. */
   async setConfigOption(configId: string, value: string): Promise<DiscoveredConfig> {
     const connection = this.#requireConnection();
     if (this.#state !== "idle") {
@@ -194,13 +171,16 @@ export class ConductorSession {
       this.#configOptions = asConfigOptions(response.configOptions);
       return this.config;
     } catch (error) {
-      // An exchange that did not complete leaves the Agent's configuration
-      // genuinely unknown: it may have applied the change, answered nothing
-      // useful, or died. Keeping the array from before the request would let
-      // Read-back go on calling a superseded value verified, so the Session
-      // forgets it instead. The pickers survive on the catalog fallback.
+      // An exchange that did not complete leaves the configuration genuinely
+      // unknown: the Agent may have applied the change, answered nothing useful,
+      // or died. Keeping the old array would let Read-back go on calling a
+      // superseded value verified, so the Session forgets it instead. The
+      // pickers survive on the catalog fallback.
       this.#configOptions = [];
-      throw error;
+      // Rethrown redacted, here rather than in each caller: this is what every
+      // one of them routes through, and what they draw goes into a transcript
+      // that is kept (ADR-0010).
+      throw new Error(redactSecrets(message(error), this.#secrets()), { cause: error });
     } finally {
       // Never over a state the exchange itself produced: the process can die,
       // or the Session be disposed, while the Agent is still deciding.
@@ -234,12 +214,17 @@ export class ConductorSession {
         sessionId: this.#sessionId,
         prompt: typeof prompt === "string" ? [{ type: "text", text: prompt }] : prompt,
       });
-      if (this.#stalled) throw this.#stallError();
+      if (this.#stalled) throw stallError(this.#sessionId, this.#spec.stallTimeoutMs ?? DEFAULT_STALL_TIMEOUT_MS);
+      // Checked, not trusted: the SDK schema-checks notifications, not answers
+      // to requests, and how a Turn ended is read off this (ADR-0007).
+      if (typeof (response as acp.PromptResponse | undefined)?.stopReason !== "string") {
+        throw new Error(`session ${this.#sessionId}: agent ended the turn with no stop reason`);
+      }
       return response;
     } catch (error) {
       // The stall is the reason the turn ended, whatever the Agent said after.
-      if (this.#stalled) throw this.#stallError();
-      const lost = Boolean(this.#exit) || this.#requireConnection().closed.aborted;
+      if (this.#stalled) throw stallError(this.#sessionId, this.#spec.stallTimeoutMs ?? DEFAULT_STALL_TIMEOUT_MS);
+      const lost = this.#lost();
       // A cancel answers `cancelled` — including when we terminated the process
       // ourselves. An Agent that died on its own is a failure that must keep its
       // exit status, even when a cancel happened to be in flight.
@@ -251,7 +236,12 @@ export class ConductorSession {
       // An Agent may refuse one turn and stay usable; only a lost connection or
       // process ends the Session, and a deliberate teardown is not a failure.
       if (lost && !this.#isDisposed()) this.#state = "failed";
-      throw this.#turnError(error);
+      throw turnError(
+        { runtimeId: this.#spec.runtimeId, sessionId: this.#sessionId, secrets: this.#secrets() },
+        error,
+        this.#exit,
+        this.#requireConnection().stderrTail(),
+      );
     } finally {
       this.#clearGrace();
       this.#clearStall();
@@ -259,10 +249,8 @@ export class ConductorSession {
     }
   }
 
-  /**
-   * Cancels the active turn: sends `session/cancel`, then terminates only this
-   * Session's process if the Agent has not stopped within the grace period.
-   */
+  /** Cancels the active turn: `session/cancel`, then terminates only this
+   *  Session's process if the Agent has not stopped within the grace period. */
   async cancel(): Promise<void> {
     if (this.#state !== "prompting") return;
     const connection = this.#requireConnection();
@@ -298,13 +286,15 @@ export class ConductorSession {
       this.#state = "disposed";
       this.#clearGrace();
       this.#clearStall();
+      // Here, so the real port ends them before anything below runs.
+      this.#endCommands();
       try {
         await this.#connection?.close();
       } catch (error) {
-        // A rejected disposal would be memoized here: every later teardown —
-        // including the extension's own — would reject too, and the cancel-grace
-        // timer calls this with nobody waiting on the promise. The Session is
-        // gone either way; what went wrong belongs in the log, not in a throw.
+        // A rejected disposal would be memoized here: every later teardown would
+        // reject too, and the cancel-grace timer calls this with nobody waiting
+        // on the promise. The Session is gone either way; what went wrong belongs
+        // in the log, not in a throw.
         this.#log("error", `session ${this.#sessionId}: disposal failed: ${message(error)}`);
       }
     })();
@@ -339,9 +329,30 @@ export class ConductorSession {
       if (this.#state === "disposed") return;
       this.#log("error", `session ${this.#sessionId}: agent process ended unexpectedly`);
       if (this.#state === "idle" || this.#state === "configuring") this.#state = "failed";
+      // What it started outlives it otherwise, until something reaches this
+      // Session again — which may be never (ADR-0008).
+      this.#endCommands();
     });
     try {
       await (sessionId === undefined ? this.#createSession() : this.#loadSession(sessionId));
+      // A new Session only: a reattached one carries a conversation produced
+      // under some configuration, and changing that halfway through is nobody's
+      // default. Inside the guard, so nothing throwing before `open` resolves
+      // can leave an Agent process nobody owns (ADR-0008).
+      if (sessionId === undefined) {
+        await applyRequestedSelections(
+          this,
+          { model: this.#requestedModel, effort: this.#requestedEffort },
+          // "Could not set", never "refused": the Agent may simply have died.
+          (slot, value, error) =>
+            this.#log("error", `session ${this.#sessionId}: could not set ${slot} ${value}: ${message(error)}`),
+        );
+        // A refusal is survivable and a death is not, and that callback cannot
+        // tell them apart. Asked of the connection, never of the state: a
+        // request in flight rejects as the pipe closes and puts the state back
+        // before the exit handler runs.
+        if (this.#lost()) throw new Error("the agent died while it was being configured");
+      }
     } catch (error) {
       await this.dispose();
       // Disposal has reaped the process, so its exit status is known by now and
@@ -352,6 +363,7 @@ export class ConductorSession {
         error,
         this.#exit,
         this.#connection?.stderrTail() ?? "",
+        this.#secrets(),
       );
     }
   }
@@ -396,34 +408,23 @@ export class ConductorSession {
     this.#configOptions = asConfigOptions(response?.configOptions);
   }
 
-  /** Bounds a request on the Setup Deadline: a Runtime that never answers must
-   *  not leave a caller pending with no way back. */
+  /** Bounds a request on the Setup Deadline. */
   #bounded<T>(work: Promise<T>, method: string): Promise<T> {
     const ms = this.#spec.setupTimeoutMs ?? DEFAULT_SETUP_TIMEOUT_MS;
     return withDeadline(work, ms, this.#clock, () =>
       new Error(`agent did not answer ${method} within ${ms}ms`));
   }
 
-  /** `additionalDirectories` goes out only when the Agent advertises support. */
   #directories(): { additionalDirectories?: string[] } {
-    const directories = this.#spec.additionalDirectories ?? [];
-    if (directories.length === 0) return {};
-    const capabilities = this.#requireConnection().handshake.agentCapabilities;
-    if (!capabilities?.sessionCapabilities?.additionalDirectories) {
-      this.#log(
-        "info",
-        `runtime ${this.#spec.runtimeId}: agent does not support additionalDirectories —` +
-          ` ${directories.length} root(s) omitted`,
-      );
-      return {};
-    }
-    return { additionalDirectories: [...directories] };
+    return additionalDirectories(
+      this.#spec.additionalDirectories ?? [],
+      this.#requireConnection().handshake.agentCapabilities,
+      (text) => this.#log("info", `runtime ${this.#spec.runtimeId}: ${text}`),
+    );
   }
 
-  /**
-   * Restarts the silence timer. A Turn only stalls on the Agent: time spent
-   * waiting for an answer the Client owes it never counts against the limit.
-   */
+  /** Restarts the silence timer: time the Client owes the Agent an answer never
+   *  counts against the limit. */
   #restartStallLimit(): void {
     this.#clearStall();
     const ms = this.#spec.stallTimeoutMs ?? DEFAULT_STALL_TIMEOUT_MS;
@@ -431,19 +432,9 @@ export class ConductorSession {
     this.#clearStallLimit = this.#clock.after(ms, () => {
       if (this.#state !== "prompting") return;
       this.#stalled = true;
-      this.#log(
-        "error",
-        `session ${this.#sessionId}: no agent activity for ${ms}ms — cancelling the turn`,
-      );
+      this.#log("error", `session ${this.#sessionId}: no agent activity for ${ms}ms — cancelling the turn`);
       void this.cancel();
     });
-  }
-
-  #stallError(): Error {
-    const ms = this.#spec.stallTimeoutMs ?? DEFAULT_STALL_TIMEOUT_MS;
-    return new Error(
-      `session ${this.#sessionId}: agent produced no output for ${ms}ms; the turn was ended`,
-    );
   }
 
   #clearStall(): void {
@@ -453,9 +444,9 @@ export class ConductorSession {
 
   #handleUpdate(notification: acp.SessionNotification): void {
     this.#restartStallLimit(); // the Agent is alive and working
-    // One process serves one Session, so a foreign id means a confused Agent:
-    // render what it sends, but never let it rewrite our verified selection.
-    const ours = this.#sessionId === "" || notification.sessionId === this.#sessionId;
+    // One process serves one Session, so any id but ours — foreign, or any at all
+    // before setup answered — is a confused Agent: render it, never adopt it.
+    const ours = notification.sessionId === this.#sessionId;
     // A complete refreshed array, prompted or not; always render the latest.
     if (ours && notification.update.sessionUpdate === "config_option_update") {
       this.#configOptions = asConfigOptions(notification.update.configOptions);
@@ -463,18 +454,12 @@ export class ConductorSession {
     this.#spec.onUpdate?.(notification);
   }
 
-  #turnError(error: unknown): Error {
-    const connection = this.#requireConnection();
-    if (this.#exit) return exitError(this.#spec.runtimeId, this.#exit, connection.stderrTail());
-    // The exit event can trail the connection close, so the status may still be
-    // unknown here. The Agent's own diagnostics are the useful part regardless.
-    return new Error(
-      `session ${this.#sessionId}: turn failed: ${message(error)}${tailOf(connection.stderrTail())}`,
-      { cause: error },
-    );
+  /** Read through a call so the compiler keeps live mutations in view. */
+  /** Gone: it exited, or the connection closed. */
+  #lost(): boolean {
+    return this.#exit !== undefined || this.#connection?.closed.aborted === true;
   }
 
-  /** Read through a call so the compiler does not narrow away live mutations. */
   #inTurn(): boolean {
     return this.#state === "prompting" || this.#state === "cancelling";
   }
@@ -493,7 +478,23 @@ export class ConductorSession {
     return this.#connection;
   }
 
+  /** Ends what this Session's Agent started. Never awaited: teardown may not
+   *  queue behind a host service, since the escalation guaranteeing the Agent
+   *  dies is armed by `close()` (ADR-0008). Wrapped so a synchronous throw
+   *  becomes a rejection this catches. */
+  #endCommands(): void {
+    void (async () => this.#ports.terminal?.dispose?.())().catch((error: unknown) => {
+      this.#log("error", `session ${this.#sessionId}: ending its commands failed: ${message(error)}`);
+    });
+  }
+
+  /** Values this Session's Agent was started with. Nothing the Agent says goes
+   *  anywhere readable without passing them (ADR-0010). */
+  #secrets(): string[] {
+    return Object.values(this.#spec.secretEnvironment ?? {});
+  }
+
   #log(level: LogLevel, text: string): void {
-    this.#ports.log?.log(level, text);
+    this.#ports.log?.log(level, redactSecrets(text, this.#secrets()));
   }
 }

@@ -47,6 +47,8 @@ V1 uses more processes and pays more cold starts. In return, it is always clear 
 
 Orchestration can be tested one session at a time. Upgrading a runtime invalidates the evidence that suppression worked. A runtime that cannot enforce a money limit shows that plainly. Resume storage stays small and can be migrated.
 
+**No runtime holds a Suppression Capability today, so no agent can hand work to another.** Granting one needs two things at once: a live list of the tools the agent actually ended up with, which ACP v1 has no way to report, and — for a plan that works by editing a file in the repository, which is how Gemini's works — the user's consent to make that edit. Collecting the consent on its own would mean writing into somebody's repository to prove nothing, so the wizard does not ask for it. Fan-out therefore stays switched off for every runtime rather than being granted on partial evidence, which is the direction that fails closed. What is left is a direct session per CLI, configured independently, which is the whole of what the connection wizard promises.
+
 ## References
 
 ADR-0004 · ARCHITECTURE.md §Data flows · UBIQUITOUS.md: Session Capability, Suppression Capability, Budget Capability, Persisted Session
