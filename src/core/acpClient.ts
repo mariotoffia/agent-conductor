@@ -299,7 +299,7 @@ export async function connectAgent(options: AgentConnectionOptions): Promise<Age
     const upTo = pendingLine.length - keep;
     if (upTo <= 0) return;
     log.log("debug", `runtime ${runtimeId} stderr: ${pendingLine.slice(0, upTo).trimEnd()}`);
-    pendingLine = "";
+    pendingLine = pendingLine.slice(upTo);
   });
 
   const clock = ports.clock ?? systemClock;
