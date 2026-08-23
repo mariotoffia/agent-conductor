@@ -1,9 +1,20 @@
 import type * as acp from "@agentclientprotocol/sdk";
 import type { SuppressionEvidence, SuppressionPlan } from "./policy.js";
 
-/** Reasoning-effort levels understood by the conductor. Agents may clamp —
- *  the effective value must always be read back (ADR-0005). */
-export type EffortLevel = "low" | "medium" | "high" | "xhigh" | "max";
+/**
+ * Reasoning-effort levels understood by the conductor, as a value.
+ *
+ * The type is derived from it rather than written beside it, because a second
+ * list is one a level can be added to without: `satisfies` proves every entry
+ * is a level, never that every level is an entry, so the copy that goes stale
+ * compiles and then refuses the value at the wire.
+ *
+ * Agents may clamp any of them — the effective value must always be read back
+ * (ADR-0005).
+ */
+export const EFFORT_LEVELS = ["low", "medium", "high", "xhigh", "max"] as const;
+
+export type EffortLevel = (typeof EFFORT_LEVELS)[number];
 
 export interface LaunchSpec {
   command: string;

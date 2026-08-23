@@ -3,7 +3,7 @@ import { mkdir, readdir, readFile, rename, rm, stat, writeFile } from "node:fs/p
 import { basename, dirname, isAbsolute, join, resolve, sep } from "node:path";
 import type * as vscode from "vscode";
 import { z } from "zod";
-import { message, redactSecrets, type EffortLevel, type StoragePort } from "../core/index.js";
+import { EFFORT_LEVELS, message, redactSecrets, type StoragePort } from "../core/index.js";
 import { CLIENT_OPERATIONS, type ClientOperation } from "./permissions.js";
 import { DEFAULT_ENV_CHARS, MAX_ENV_CHARS } from "./terminals.js";
 
@@ -46,11 +46,6 @@ export type PortsMatchVsCodeApi = [
   Assert<vscode.WorkspaceConfiguration extends SettingsSource ? true : false>,
   Assert<vscode.SecretStorage extends SecretsSource ? true : false>,
 ];
-
-/** Reasoning levels this Client understands. The wizard checks a value against
- *  these before saving it as a default: an Agent may offer levels of its own,
- *  and a setting that does not validate is a setting VS Code ignores. */
-export const EFFORT_LEVELS = ["low", "medium", "high", "xhigh", "max"] as const satisfies readonly EffortLevel[];
 
 const effortLevel = z.enum(EFFORT_LEVELS);
 

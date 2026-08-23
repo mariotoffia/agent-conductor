@@ -13,6 +13,10 @@ NODE  ?= node
 REPORTS := reports
 CORE_DIR ?= src/core
 CORE_LOG ?= $(REPORTS)/core-imports.log
+# What a seam forbids, so one checker serves every seam. Quoted `vscode` by
+# default; the Shim additionally may not reach the core, and eslint's import
+# patterns do not see a dynamic `import()` or a `createRequire` call.
+CORE_PAT ?= ['\"\`]vscode['\"\`]
 
 .DEFAULT_GOAL := help
 .PHONY: help install doctor build watch lint typecheck core-imports gate-selftest pipe-probe \
@@ -51,6 +55,8 @@ lint: typecheck gate-selftest ## All static checks → reports/<tool>.log (eslin
 	@mkdir -p $(REPORTS)
 	npx eslint src --max-warnings 0 2>&1 | tee $(REPORTS)/eslint.log
 	@$(MAKE) --no-print-directory core-imports
+	@$(MAKE) --no-print-directory core-imports CORE_DIR=src/shim CORE_LOG=$(REPORTS)/shim-imports.log
+	@$(MAKE) --no-print-directory core-imports CORE_DIR=src/shim CORE_LOG=$(REPORTS)/shim-core.log CORE_PAT='\.\..*core'
 
 # Extraction seam (ADR-0003). The pattern is any quoted `vscode`, not an import
 # form: static import, dynamic `import()`, `require`, a backtick specifier and
@@ -62,9 +68,9 @@ lint: typecheck gate-selftest ## All static checks → reports/<tool>.log (eslin
 # an OK. CORE_DIR/CORE_LOG let the self-test run this very recipe on a probe.
 core-imports: ## Check the vscode-free seam over $(CORE_DIR)
 	@mkdir -p $(REPORTS)
-	@grep -rnE "['\"\`]vscode['\"\`]" $(CORE_DIR) > $(CORE_LOG); \
+	@grep -rnE "$(CORE_PAT)" $(CORE_DIR) > $(CORE_LOG); \
 	  case $$? in \
-	    0) echo "FAIL: vscode import inside $(CORE_DIR) (see $(CORE_LOG))"; exit 1 ;; \
+	    0) echo "FAIL: forbidden import inside $(CORE_DIR) (see $(CORE_LOG))"; exit 1 ;; \
 	    1) echo "core-imports: OK" > $(CORE_LOG) ;; \
 	    *) echo "FAIL: core-import check could not read $(CORE_DIR)"; exit 1 ;; \
 	  esac

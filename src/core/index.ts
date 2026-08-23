@@ -13,3 +13,5 @@ export * from "./sessionStore.js";
 export * from "./sessionResume.js";
 export * from "./executables.js";
 export * from "./connect.js";
+export * from "./ipcProtocol.js";
+export * from "./ipc.js";

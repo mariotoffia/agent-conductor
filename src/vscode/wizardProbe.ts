@@ -2,6 +2,7 @@ import {
   message,
   openProbeSession,
   pickEffortChoices,
+  EFFORT_LEVELS,
   pickModelChoices,
   redactSecrets,
   SMOKE_PROMPT,
@@ -11,7 +12,6 @@ import {
   type ResolvedRuntime,
 } from "../core/index.js";
 import { readBackLine } from "./chatSink.js";
-import { EFFORT_LEVELS } from "./config.js";
 import { asQuickItem } from "./elicitation.js";
 import { clampForDisplay, MAX_DETAIL_CHARS, MAX_LABEL_CHARS } from "./permissions.js";
 import { ask, Cancelled, pickIndex, report, safeText, shownName } from "./wizardAsk.js";

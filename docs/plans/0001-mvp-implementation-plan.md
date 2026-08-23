@@ -353,14 +353,28 @@ interface EffectiveSelection {
 
 ### Task 12: Implement per-Session authenticated IPC and the Shim
 
-**Files:** Create `src/core/ipc.ts`, `src/shim/socketClient.ts`; modify `src/shim/mcp-shim.ts`; create IPC and Shim tests.
+**Files:** Created `src/core/ipc.ts`, `src/core/ipcProtocol.ts`, `src/shim/socketClient.ts`, `src/test/ipc-fixtures.ts`, `src/test/unit/{ipc_capability,ipc_framing,ipc_connections,shim_orchestration_tools,shim_socket_client}.test.ts`; modified `src/shim/mcp-shim.ts`, `src/core/{index,types}.ts`, `src/vscode/{config,wizardProbe}.ts`, `src/test/unit/manifest_security.test.ts`, `eslint.config.mjs`, `Makefile`, `ARCHITECTURE.md`, `UBIQUITOUS.md`.
 
-- [ ] Test missing/malformed/expired capabilities, cross-Session replay, wrong workspace/depth, oversized frames, disconnects, and unsupported methods before happy paths.
-- [ ] Use length-bounded NDJSON request/response over a random local socket/pipe with restrictive filesystem permissions where supported.
-- [ ] Bind each random capability server-side to immutable Session ID, parent ID, depth, roots, expiry, and allowed methods; compare secrets in constant time.
-- [ ] Expose `list_runtimes`, `spawn_subagent`, `check_subagent`, `subagent_result`, and `cancel_subagent`; validate every input with Zod.
-- [ ] Remove `orchestrator_status` or make it authenticated and non-sensitive.
-- [ ] Run focused IPC/Shim tests; expect pass. Commit: `feat: authenticate orchestrator shim calls`.
+- [x] Test missing/malformed/expired capabilities, cross-Session replay, wrong workspace/depth, oversized frames, disconnects, and unsupported methods before happy paths.
+  - A frame that cannot be answered — no id, not an object, not JSON — is refused with a null id *and* ends the connection: the Shim matches answers by id, so a nameless failure on its own is a call that never returns, and the Agent waits out its whole turn to learn nothing. For the same reason a throw on the way to composing an answer is caught where every call routes through rather than trusted not to happen, since an untrusted frame can make describing it throw.
+  - The transport is bounded in both directions and at both ends, and both ends check the two ways a frame can be too long: one that never ends, and one whose ending arrives past the limit. Only the first was checked at first, and only a test that produced the second found it.
+  - An answer is bounded by what it *quotes*, not only by what it says: the id comes back in every one, so a request inside the limit whose id was nearly all of it produced an answer beyond the limit — which the Shim refuses wholesale, taking every call in flight on that connection with it. Bounding the message alone left that open, twice.
+- [x] Use length-bounded NDJSON request/response over a random local socket/pipe with restrictive filesystem permissions where supported.
+  - The socket sits in a directory of its own created `0700`, and is itself `0600`: Linux honours the socket's mode and macOS the directory's, so neither alone is the guarantee.
+  - Bounded as the bytes arrive rather than once a frame is whole, and the limit is read per line rather than per chunk — the handshake's own tight limit still being in force behind it refused every brief longer than a secret, which is every real one.
+- [x] Bind each random capability server-side to immutable Session ID, parent ID, depth, roots, expiry, and allowed methods; compare secrets in constant time.
+  - Every request schema is `strict`, so a frame that so much as names a lineage field is refused rather than having it ignored. What is issued is copied at the mint, so an issuer that later mutates its own array does not widen what is enforced.
+  - Authority is re-checked per call and not only at the handshake: a frame read while a capability was live can still be waiting behind a slow one when it is withdrawn, and that frame must not reach the Orchestrator.
+  - The comparison is hashed first so both sides are one length — answering "wrong length" quickly is itself an answer — and the table is scanned without an early exit. Neither is testable: a `===` or a `break` passes the whole suite, and the code says so where it does it.
+- [x] Expose `list_runtimes`, `spawn_subagent`, `check_subagent`, `subagent_result`, and `cancel_subagent`; validate every input with Zod.
+  - `runtime` is a string rather than an enum of the four built-ins, because the catalog says which Runtimes exist and a user-defined one is a full member of it. Effort is an enum, and the vocabulary now has one home the type derives from: `satisfies` proves every entry is a level, never that every level is an entry, and there were four copies of that list drifting apart. The two that cannot derive it — the Shim, which imports nothing, and the manifest, which VS Code reads instead of the code — are held to it by tests.
+  - A path in a Brief must be absolute here, because that is where ACP's rule can still be applied to what an Agent wrote. Which roots it must fall inside is the Orchestrator's to say.
+- [x] Remove `orchestrator_status` or make it authenticated and non-sensitive.
+  - Removed. A tool that only says the Shim is alive is authority spent on nothing; a test pins the exact tool set so it cannot come back unnoticed.
+- [x] Run focused IPC/Shim tests; expect pass. Commit: `feat: authenticate orchestrator shim calls`.
+  - Three rounds of adversarial review found, and this fixes: a peer refused or lapsed that the server went on reading, at 13.6 MB and quadratic copying on the extension host's only thread; a handshake deadline that was an idle timer, so one byte per half-deadline held a connection indefinitely and enough of them locked every Session out; connections and calls with no ceiling at all, where one read started twenty thousand handlers; a goodbye that was never reaped, and one that reset the peer before it could read why.
+  - Twice the same shape: a guard read once outside a loop whose body changes what it guards. The frame limit was one; the goodbye was the other, where the very frame just dispatched ends the connection and the next turn of the loop resumed the socket it had paused.
+  - Every guard was probed by deleting it, and a test that survived its guard was rewritten or removed — one such was deleted outright rather than propped up, because the mechanism it named is one shared function whose other caller already pins it falsifiably. Three tests passed with their guard gone — two writes that arrived as one read, so the split they claimed to test never happened; a backlog measured only against the constant it was testing; and a refusal matched against text the server also produces. A fourth passed for the wrong reason: the unfixed server is merely slow, and slowness makes backpressure too, so it was measured against both paths before being trusted.
 
 ### Task 13: Implement bounded orchestration and worktree lifecycle
 

@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { test } from "node:test";
+import { EFFORT_LEVELS } from "../../core/index.js";
 import { DEFAULT_ENV_CHARS, MAX_ENV_CHARS } from "../../vscode/terminals.js";
 
 interface JsonSchema {
@@ -163,4 +164,13 @@ test("whether opening a folder starts an agent is not the folder's to decide", (
   // because a window opened. A cloned repository that could turn that on would
   // be choosing to run something before anybody had looked at it (ADR-0007).
   assert.equal(settings["agentConductor.sessions.resumeOnStartup"]?.scope, "machine");
+});
+
+test("the manifest offers the effort levels this Client actually understands", () => {
+  // A copy the type cannot derive: VS Code reads the manifest, not the code, so
+  // a level added to the vocabulary and not here is one the settings editor
+  // calls invalid — and one nobody could have saved to reach the wire.
+  const entry = settings["agentConductor.runtimes"].additionalProperties;
+  const runtime = typeof entry === "object" ? entry.properties : undefined;
+  assert.deepEqual(runtime?.defaultEffort?.enum, [...EFFORT_LEVELS]);
 });
