@@ -1,8 +1,10 @@
 import { test, type TestContext } from "node:test";
 import {
+  ConductorSession,
   resolveRuntime,
   type AgentProcess,
   type ExecutablePort,
+  type ModelHint,
   type RuntimeSpec,
   type RuntimeTrust,
   type SessionPorts,
@@ -12,7 +14,7 @@ import type { ChatCommand } from "../vscode/chatSink.js";
 import { ConductorParticipant, type RuntimeChoice } from "../vscode/participant.js";
 import { openTrustedSession } from "../vscode/spawnGate.js";
 import type { QuickItem } from "../vscode/elicitation.js";
-import { launchMockAgent, recordingProcessPort } from "./acp-harness.js";
+import { launchMockAgent, recordingProcessPort, type SentLine } from "./acp-harness.js";
 
 /**
  * Fixtures for driving the chat participant against a real mock-Agent process:
@@ -90,6 +92,19 @@ export interface Harness {
   offered: QuickItem[][];
   /** Every agent process the participant started, in order. */
   agents: AgentProcess[];
+  /** Every JSON-RPC line this Client wrote to an Agent, in order. */
+  sent: SentLine[];
+  /** What each quick pick was headed with, in order. */
+  pickOptions: ({ title?: string; placeHolder?: string } | undefined)[];
+  /** Everything the participant and its sink recorded. */
+  logged: string[];
+  /** How many times the participant has said that what it owns has moved. */
+  changes(): number;
+  /** The state of every session it owns, snapshotted at each of those moments —
+   *  what a view drawing itself from the event would have seen. */
+  drawnStates(): string[][];
+  /** The Runtime id each session was opened for, in order. */
+  opened: string[];
   choose(label: string | undefined): void;
   /** Picks by position, as a user clicking a list does. */
   chooseAt(index: number): void;
@@ -112,9 +127,25 @@ export interface Harness {
 }
 
 /** Participant wired to a real mock-Agent process on a trusted Runtime. */
-export function participantOn(t: TestContext, spec: RuntimeSpec, overrides: { trusted?: boolean; workspaceTrusted?: boolean } = {}): Harness {
+export function participantOn(
+  t: TestContext,
+  spec: RuntimeSpec,
+  overrides: {
+    trusted?: boolean;
+    workspaceTrusted?: boolean;
+    secretEnvironment?: () => Promise<Record<string, string>>;
+    onChanged?: () => void;
+    log?: () => void;
+    runtimeChoice?: RuntimeChoice;
+    /** Runtimes the picker offers; `[]` is a window with none configured. */
+    runtimes?: RuntimeChoice[];
+    /** The Runtime catalog's own model hints, for an Agent that exposes none. */
+    modelCatalog?: ModelHint[];
+  } = {},
+): Harness {
   const diffs = new DiffDocuments();
   const offered: QuickItem[][] = [];
+  const pickOptions: ({ title?: string; placeHolder?: string } | undefined)[] = [];
   let answer: string | undefined;
   let answerAt: number | undefined;
   let thinking = true;
@@ -138,6 +169,12 @@ export function participantOn(t: TestContext, spec: RuntimeSpec, overrides: { tr
   });
   let held = false;
   const agents: AgentProcess[] = [];
+  const sent: SentLine[] = [];
+  let changes = 0;
+  const opened: string[] = [];
+  const logged: string[] = [];
+  const started: ConductorSession[] = [];
+  const drawnStates: string[][] = [];
   let noteAsked = (): void => undefined;
   const permissionAsked = new Promise<void>((resolve) => {
     noteAsked = resolve;
@@ -147,7 +184,7 @@ export function participantOn(t: TestContext, spec: RuntimeSpec, overrides: { tr
     release = resolve;
   });
   const ports: SessionPorts = {
-    process: recordingProcessPort([], [], agents),
+    process: recordingProcessPort([], sent, agents),
     permission: {
       requestPermission: async () => {
         noteAsked();
@@ -158,12 +195,26 @@ export function participantOn(t: TestContext, spec: RuntimeSpec, overrides: { tr
   };
   const participant = new ConductorParticipant({
     diffs,
+    log: {
+      log: (_severity, text) => {
+        logged.push(text);
+        overrides.log?.();
+      },
+    },
     defaultRuntimeId: () => spec.id,
     showThinking: () => thinking,
-    runtimes: async (): Promise<RuntimeChoice[]> => [{ id: spec.id, label: spec.displayName }],
+    runtimes: async (): Promise<RuntimeChoice[]> =>
+      overrides.runtimes ?? [overrides.runtimeChoice ?? { id: spec.id, label: spec.displayName }],
     runtimeQuirks: () => spec.quirks,
-    pick: async (items) => {
+    ...(overrides.modelCatalog ? { modelCatalog: () => overrides.modelCatalog ?? [] } : {}),
+    onChanged: () => {
+      changes += 1;
+      drawnStates.push(started.map((session) => session.state));
+      overrides.onChanged?.();
+    },
+    pick: async (items, options) => {
       offered.push([...items]);
+      pickOptions.push(options);
       notePickOffered();
       if (pickHeld) await pickAllowed;
       // VS Code answers with the very object it was handed; so does this.
@@ -171,16 +222,20 @@ export function participantOn(t: TestContext, spec: RuntimeSpec, overrides: { tr
         ? items.find((item) => item.label === answer)
         : items[answerAt];
     },
-    open: async (runtimeId, onUpdate) => {
-      const session = await openTrustedSession({
+    open: async (runtimeId, onUpdate, load) => {
+      opened.push(runtimeId);
+      const { session } = await openTrustedSession({
         spec: runtimeId === spec.id ? spec : { ...spec, id: runtimeId },
         executable,
         trust: overrides.trusted === false ? undefined : await trustFor(spec),
         workspaceTrusted: overrides.workspaceTrusted ?? true,
-        cwd: process.cwd(),
+        cwd: load?.workspace ?? process.cwd(),
+        ...(overrides.secretEnvironment ? { secretEnvironment: overrides.secretEnvironment } : {}),
+        ...(load ? { loadSessionId: load.sessionId } : {}),
         onUpdate,
         ports,
       });
+      started.push(session);
       // The window between the agent process existing and the participant
       // adopting the session it belongs to.
       noteOpenStarted();
@@ -193,7 +248,13 @@ export function participantOn(t: TestContext, spec: RuntimeSpec, overrides: { tr
     participant,
     diffs,
     offered,
+    pickOptions,
+    logged,
     agents,
+    sent,
+    changes: () => changes,
+    drawnStates: () => drawnStates,
+    opened,
     choose: (label) => {
       answer = label;
     },

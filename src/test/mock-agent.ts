@@ -89,7 +89,11 @@ const app = acp
     if (mode === "no-session-id") {
       return { ...configOptionsFor(mode) } as unknown as acp.NewSessionResponse;
     }
-    const sessionId = `mock-session-${nextSession++}`;
+    // `echo-secret` words its own environment back at the client — the case a
+    // row and a record are redacted for. An Agent chooses its own session id.
+    const sessionId = mode === "echo-secret"
+      ? `sess-${process.env.MOCK_SECRET ?? "none"}`
+      : `mock-session-${nextSession++}`;
     sessions.set(sessionId, context.params);
     return {
       sessionId,
@@ -358,6 +362,15 @@ const app = acp
     });
     // `full-turn` adds everything else a client has to draw, so one turn can
     // stand for the whole render map rather than a sample of it.
+    // Every field of a session info update is optional, so one can carry nothing
+    // worth drawing. A client still has to record it: an Update nobody drew
+    // reads exactly like an Agent that sent nothing.
+    if (mode === "quiet-session-info") {
+      await context.client.notify(acp.methods.client.session.update, {
+        sessionId,
+        update: { sessionUpdate: "session_info_update" },
+      });
+    }
     if (mode === "full-turn") {
       for (const update of [
         {

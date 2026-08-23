@@ -1,21 +1,19 @@
+import { randomUUID } from "node:crypto";
 import { basename } from "node:path";
 import * as vscode from "vscode";
 import {
   executablePort,
-  logsAt,
-  nodeProcessPort,
+  message,
   describeRefresh,
   readCachedRegistry,
   refreshRegistry,
   resolveRuntime,
   runtimeCatalog,
   savesSettled,
-  type LogLevel,
-  type LogPort,
   type RegistrySnapshot,
+  type ResumeConditions,
   type RuntimeSpec,
   type RuntimeTrust,
-  type SessionPorts,
 } from "../core/index.js";
 import {
   fileStorage,
@@ -24,15 +22,16 @@ import {
   type ConductorSettings,
   type RuntimeSetting,
 } from "./config.js";
+import { liveLogPort, sessionPorts } from "./clientPorts.js";
+import { formHost, modalConsentHost, openDocuments } from "./hostPorts.js";
 import { DiffDocuments, DIFF_SCHEME } from "./diffDocs.js";
-import { FormElicitor, type FormHost } from "./elicitation.js";
-import { WorkspaceFs, type OpenDocuments } from "./fsProvider.js";
 import { OPEN_DIFF_COMMAND } from "./chatSink.js";
 import { ConductorParticipant, type RuntimeChoice } from "./participant.js";
-import { openTrustedSession } from "./spawnGate.js";
-import { PermissionRouter, type ConsentHost } from "./permissions.js";
-import { remember } from "./sessionRecords.js";
-import { TerminalService } from "./terminals.js";
+import { fileRoots } from "./spawnGate.js";
+import type { ConsentHost } from "./permissions.js";
+import { launchSession } from "./sessionLaunch.js";
+import { sessionActions, sessionCommands } from "./sessionActions.js";
+import { SessionsTree, type SessionNode } from "./sessionsTree.js";
 import { connectCli } from "./wizard.js";
 import { wizardHost, wizardTerminals } from "./wizardHost.js";
 
@@ -73,6 +72,8 @@ export interface ConductorTestHooks {
   participant: ConductorParticipant;
   /** Diffs this window has retained, for checking the diff command. */
   diffs: DiffDocuments;
+  /** The live Sessions tree, so its rows and actions can be driven in the host. */
+  sessions: SessionsTree;
   /** Answers consent dialogs, which a test cannot click. `undefined` restores
    *  the real modal. */
   useConsent(host: ConsentHost | undefined): void;
@@ -106,6 +107,10 @@ export function activateConductor(context: vscode.ExtensionContext): ConductorAc
   const log = liveLogPort(channel, () => settings()["logging.level"]);
 
   const storage = fileStorage(context.globalStorageUri.fsPath);
+  // Made afresh per activation, and never written anywhere but beside a hold: a
+  // window that was killed comes back as a different one, so the Sessions it was
+  // running stop being its own and become somebody's that has gone quiet.
+  const windowId = randomUUID();
   // Validated Registry snapshot, read in the background: it supplies exact
   // Adapter versions and nothing else, the built-in catalog launches every
   // Runtime without it, and activation must not wait on a file to hand the
@@ -123,8 +128,13 @@ export function activateConductor(context: vscode.ExtensionContext): ConductorAc
     return catalog(current, current["registry.autoResolve"] ? registry : undefined, override);
   };
 
-  const recordTrust = (runtimeId: string, trust: RuntimeTrust): Promise<void> =>
-    Promise.resolve(context.globalState.update(trustKey(runtimeId), trust));
+  const recordTrust = async (runtimeId: string, trust: RuntimeTrust): Promise<void> => {
+    await context.globalState.update(trustKey(runtimeId), trust);
+    // Approving a Runtime changes which saved Sessions may be reattached to, in
+    // both directions: the ones that ran under the identity just approved, and
+    // the ones that ran under the one it replaced.
+    sessions.refresh();
+  };
 
   // Replaced only through the test hooks below; the real modal otherwise.
   let consent: ConsentHost | undefined;
@@ -133,6 +143,37 @@ export function activateConductor(context: vscode.ExtensionContext): ConductorAc
   const diffs = new DiffDocuments();
   context.subscriptions.push(
     vscode.workspace.registerTextDocumentContentProvider(DIFF_SCHEME, diffs),
+  );
+
+  /** What resumability is re-derived against right now (ADR-0008). */
+  const conditions = (): ResumeConditions => ({
+    fingerprints: new Map(
+      runtimes().flatMap((spec) => {
+        const fingerprint = trustFor(context, spec)?.fingerprint;
+        return fingerprint === undefined ? [] : [[spec.id, fingerprint] as const];
+      }),
+    ),
+    workspaces: workspaceRoots(),
+    now: Date.now(),
+    window: windowId,
+  });
+  const sessions = new SessionsTree({
+    storage,
+    conditions,
+    now: () => Date.now(),
+    icon: (id) => new vscode.ThemeIcon(id),
+    saved: () => savesSettled(storage),
+  });
+  context.subscriptions.push(
+    vscode.window.createTreeView("agentConductor.sessions", { treeDataProvider: sessions }),
+    // What a row may be asked to do is re-derived from these every time it is
+    // drawn, so a row drawn before one of them changed is a row offering an
+    // action that will be refused — and saying nothing about why, because its
+    // reason was worked out under the old answer.
+    vscode.workspace.onDidChangeWorkspaceFolders(() => sessions.refresh()),
+    vscode.workspace.onDidChangeConfiguration((change) => {
+      if (change.affectsConfiguration("agentConductor")) sessions.refresh();
+    }),
   );
 
   const participant = new ConductorParticipant({
@@ -146,47 +187,35 @@ export function activateConductor(context: vscode.ExtensionContext): ConductorAc
     modelCatalog: (runtimeId) =>
       runtimes().find((spec) => spec.id === runtimeId)?.modelCatalog ?? [],
     runtimeQuirks: (runtimeId) => runtimes().find((spec) => spec.id === runtimeId)?.quirks,
-    open: async (runtimeId, onUpdate) => {
-      const current = settings();
-      const spec = runtimes().find((entry) => entry.id === runtimeId);
-      if (!spec) {
-        throw new Error(
-          `runtime ${runtimeId} is not configured — run "Agent Conductor: Connect a CLI…"`,
-        );
-      }
-      const roots = sessionRoots();
-      const trust = trustFor(context, spec);
-      const entry = current.runtimes[spec.id];
-      const secretEnvironment = await resolveSecretEnvironment(
-        context.secrets,
-        spec.id,
-        entry?.secretEnvironment,
-      );
-      const session = await openTrustedSession({
-        spec,
-        executable: executablePort(),
-        // Workspace trust is the window's own answer, read at spawn time rather
-        // than cached: a workspace can be trusted after the extension started.
-        workspaceTrusted: vscode.workspace.isTrusted,
-        ...(trust ? { trust } : {}),
-        cwd: roots[0],
-        additionalDirectories: roots.slice(1),
-        secretEnvironment,
-        ...(entry?.defaultModel ? { requestedModel: entry.defaultModel } : {}),
-        ...(entry?.defaultEffort ? { requestedEffort: entry.defaultEffort } : {}),
+    onChanged: () => sessions.refresh(),
+    open: (runtimeId, onUpdate, load) =>
+      launchSession({
+        runtimeId,
+        ...(load ? { load } : {}),
         onUpdate,
-        ports: sessionPorts(current, roots, spec.displayName, log, askConsent()),
-      });
-      remember(session, storage, log, {
-        runtimeId: spec.id,
-        workspace: roots[0],
-        secrets: Object.values(secretEnvironment),
-        // The launch this Session ran under. `openTrustedSession` only returns
-        // for a Runtime whose fingerprint matched, so this is that fingerprint.
-        ...(trust ? { fingerprint: trust.fingerprint } : {}),
-      });
-      return session;
-    },
+        runtimes: () => runtimes(),
+        settings,
+        roots: workspaceRoots,
+        workspaceTrusted: () => vscode.workspace.isTrusted,
+        trustFor: (spec) => trustFor(context, spec),
+        secretsFor: (spec, references) =>
+          resolveSecretEnvironment(context.secrets, spec.id, references),
+        executable: executablePort(),
+        ports: (current, roots, agentLabel) =>
+          sessionPorts({
+            settings: current,
+            roots,
+            agentLabel,
+            log,
+            consent: askConsent(),
+            documents: openDocuments(),
+            forms: formHost(),
+          }),
+        storage,
+        log,
+        sessions,
+        window: windowId,
+      }),
   });
   // `stop`, not `dispose`: this teardown is the final one, and a turn waiting
   // on a dead Session must not resume behind it.
@@ -202,13 +231,24 @@ export function activateConductor(context: vscode.ExtensionContext): ConductorAc
   // Built here rather than per wizard run: it registers a disposable on the
   // context and holds the one login terminal, both of which are the window's.
   const runInTerminal = wizardTerminals(context);
+  const actions = sessionActions({
+    participant,
+    workspaces: workspaceRoots,
+    storage,
+    conditions,
+    resumeOnStartup: () => settings()["sessions.resumeOnStartup"],
+    host: {
+      execute: (command, ...args) => Promise.resolve(vscode.commands.executeCommand(command, ...args)),
+      // The window's own voice, so ending a session is visible where the user
+      // asked for it rather than only in a log nobody has open.
+      inform: (text) => void vscode.window.showInformationMessage(text),
+      fail: (text) => void vscode.window.showErrorMessage(text),
+    },
+  });
   context.subscriptions.push(
     vscode.commands.registerCommand(OPEN_DIFF_COMMAND, (id: unknown) => openDiff(diffs, id)),
-    vscode.commands.registerCommand("agentConductor.newSession", async () => {
-      await participant.dispose();
-      channel.info("session ended; the next prompt starts a new one");
-    }),
-    vscode.commands.registerCommand("agentConductor.cancelAll", () => participant.cancel()),
+    ...Object.entries(sessionCommands(actions)).map(([id, run]) =>
+      vscode.commands.registerCommand(id, (node?: SessionNode) => run(node))),
     // The Connect-a-CLI wizard is the only thing that records Runtime Trust:
     // until a Runtime has been through it, no identity is approved and every
     // spawn is refused, which is the direction that fails closed (ADR-0007).
@@ -239,6 +279,11 @@ export function activateConductor(context: vscode.ExtensionContext): ConductorAc
     }),
   );
 
+  // Never awaited: activation must not wait on a file, still less on a process.
+  void actions.resumeOnStartup().catch((error: unknown) => {
+    log.log("error", `no session was resumed on startup: ${message(error)}`);
+  });
+
   channel.info("Agent Conductor activated.");
   return {
     teardown: async () => {
@@ -253,6 +298,7 @@ export function activateConductor(context: vscode.ExtensionContext): ConductorAc
           hooks: {
             participant,
             diffs,
+            sessions,
             useConsent: (host) => {
               consent = host;
             },
@@ -313,101 +359,14 @@ function trustFor(context: vscode.ExtensionContext, spec: RuntimeSpec): RuntimeT
 const trustKey = (runtimeId: string): string => `runtimeTrust.${runtimeId}`;
 
 /**
- * Absolute Session roots. The first folder is the session `cwd`; the rest are
- * sent as `additionalDirectories`, and only when the Agent supports them.
+ * The same folders, without the demand that there be any.
+ *
+ * The Sessions tree is drawn in a window with no folder open, and every saved
+ * Session in it is then correctly one that cannot be resumed. Only starting a
+ * Session needs a `cwd`, so only that refuses.
  */
-function sessionRoots(): string[] {
-  const folders = vscode.workspace.workspaceFolders ?? [];
-  const roots = folders.filter((folder) => folder.uri.scheme === "file").map((folder) => folder.uri.fsPath);
-  if (roots.length === 0) {
-    throw new Error("open a folder before starting a session — ACP requires an absolute cwd");
-  }
-  return roots;
-}
-
-/** The Client Ports one Session is served through. */
-function sessionPorts(
-  settings: ConductorSettings,
-  roots: string[],
-  agentLabel: string,
-  log: LogPort,
-  askConsent: ConsentHost,
-): SessionPorts {
-  const consent = new PermissionRouter(
-    {
-      autoAllow: settings["permissions.autoAllowClientOperations"],
-      autoReject: settings["permissions.autoRejectClientOperations"],
-      rememberAlwaysChoices: settings["permissions.rememberAlwaysChoices"],
-    },
-    askConsent,
-    agentLabel,
-  );
-  return {
-    process: nodeProcessPort,
-    permission: consent,
-    fs: new WorkspaceFs({ roots, documents: openDocuments(), consent }),
-    terminal: new TerminalService({
-      roots,
-      consent,
-      maxEnvironmentChars: settings["permissions.maxEnvironmentChars"],
-    }),
-    elicitation: new FormElicitor(formHost()),
-    log,
-  };
-}
-
-const modalConsentHost = (): ConsentHost => ({
-  ask: (message, options, ...choices) => vscode.window.showWarningMessage(message, options, ...choices),
-});
-
-const formHost = (): FormHost => ({
-  input: (options) => vscode.window.showInputBox(options),
-  pick: (items, options) => vscode.window.showQuickPick(items, options),
-  pickMany: (items, options) => vscode.window.showQuickPick(items, options),
-});
-
-/** Open editor buffers, so a read serves what is on screen rather than the last save. */
-function openDocuments(): OpenDocuments {
-  const find = (path: string): vscode.TextDocument | undefined =>
-    vscode.workspace.textDocuments.find(
-      (document) => document.uri.scheme === "file" && document.uri.fsPath === path,
-    );
-  return {
-    text: (path) => find(path)?.getText(),
-    async replace(path, content) {
-      const document = find(path);
-      if (!document) return false;
-      const edit = new vscode.WorkspaceEdit();
-      // Through the editor, so the change joins the user's undo history.
-      edit.replace(document.uri, wholeDocument(document), content);
-      return vscode.workspace.applyEdit(edit);
-    },
-  };
-}
-
-function wholeDocument(document: vscode.TextDocument): vscode.Range {
-  return new vscode.Range(document.positionAt(0), document.positionAt(document.getText().length));
-}
-
-/**
- * Binds the four severities to the output channel. Which of them are written is
- * decided by `logsAt`, in the core, where a test can reach it — this is only the
- * wiring. `off` drops the record; the level is re-read per record, so this is
- * the composition and never the policy.
- */
-function liveLogPort(channel: vscode.LogOutputChannel, level: () => string): LogPort {
-  const write: Record<LogLevel, (text: string) => void> = {
-    error: (text) => channel.error(text),
-    info: (text) => channel.info(text),
-    debug: (text) => channel.debug(text),
-    trace: (text) => channel.trace(text),
-  };
-  return {
-    log: (severity, text) => {
-      const configured = level();
-      if (configured !== "off" && logsAt(configured, severity)) write[severity](text);
-    },
-  };
+function workspaceRoots(): string[] {
+  return fileRoots(vscode.workspace.workspaceFolders ?? []);
 }
 
 /**

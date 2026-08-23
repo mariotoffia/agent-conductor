@@ -42,21 +42,29 @@ function withoutHostEnvironment(): Record<string, string | undefined> {
 
 async function main(): Promise<void> {
   const workspace = await mkdtemp(join(tmpdir(), "conductor-host-"));
-  // Removed however the run ends: this harness makes one per invocation, and
-  // the unit suite's fixtures were leaking the same way until they were fixed.
+  // Its own profile, made and destroyed with the run. Without one, VS Code keeps
+  // the default directory under `.vscode-test`, and the extension's global
+  // storage survives every invocation — so a suite would read Sessions saved by
+  // the run before it, in workspaces that no longer exist, and a gate that is
+  // green on a clean machine goes red on the second run. Removed however the run
+  // ends, like the workspace beside it.
+  const profile = await mkdtemp(join(tmpdir(), "conductor-profile-"));
   try {
-    await runInside(workspace);
+    await runInside(workspace, profile);
   } finally {
     await rm(workspace, { recursive: true, force: true });
+    await rm(profile, { recursive: true, force: true });
   }
 }
 
-async function runInside(workspace: string): Promise<void> {
+async function runInside(workspace: string, profile: string): Promise<void> {
   await runTests({
     extensionDevelopmentPath: root,
     extensionTestsPath: resolve(root, "dist", "test", "suite", "index.cjs"),
     launchArgs: [
       workspace,
+      "--user-data-dir",
+      profile,
       // Only this extension, and a workspace already trusted — the refusal that
       // untrusted workspaces produce has its own test under `make test`.
       "--disable-extensions",

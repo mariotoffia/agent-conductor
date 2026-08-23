@@ -19,7 +19,7 @@ Status: active. Plans are temporary; promote durable decisions to ADRs or canoni
 | Core ACP client and mock Agent | Handshake, prompt, Updates, cancel, and permissions covered by unit tests | Done |
 | Stable direct Session | `@conductor` streams messages, thoughts, tool calls, diffs, permissions, usage, and Read-back | Pending |
 | Wizard, settings, and multiple Runtimes | Claude, Codex, Gemini, and Copilot can be validated and configured from live Config Options | Pending |
-| Orchestrator | Suppression, authenticated Shim tools, worktrees, limits, cancellation cascade, and Sessions tree pass integration tests | Pending |
+| Orchestrator | Suppression, authenticated Shim tools, worktrees, limits, cancellation cascade, and Sessions tree pass integration tests | Partial — the Sessions tree passes extension-host tests; the rest waits on the Shim and Orchestrator |
 | Real release gate | `make check-all` runs non-empty extension-host tests against the mock Agent | Pending |
 | Rich VSIX build | Proposed Session UI has render parity with the stable sink, or the unfinished package target is removed | Pending |
 | ACP-agent Facade | Conductor is exposed as an ACP Agent by reusing `src/core` | Deferred until the MVP gates pass |
@@ -52,7 +52,7 @@ Authority order used by the audit:
 | ACP client and Session lifecycle | Implemented | `src/core/acpClient.ts`, `src/core/session.ts`; contract and lifecycle tests under `src/test/unit/` | Keep one process per Session; Config Option Read-back and persistence build on it. |
 | Config Option discovery and Read-back | Absent | Types mention effort but no protocol handling exists | Drive selectors from live `configOptions`, retain complete refreshes, and expose requested versus effective values. |
 | Permission, filesystem, terminal, and elicitation client services | Absent | No `src/vscode/**` implementation exists | Add validated ports and VS Code adapters without claiming they sandbox the Agent process. |
-| Sessions tree, transcript, and diff provider | Absent | Manifest contributes a view but no provider is registered | Render direct and child Session state and wire cancel/resume/diff commands. |
+| Sessions tree, transcript, and diff provider | Implemented for direct Sessions | `src/vscode/sessionsTree.ts`, `sessionRows.ts`, `sessionActions.ts`; unit and extension-host coverage | Child Session rows need the Orchestrator to record lineage and worktrees. |
 | Runtime registry refresh | Stub | Command only logs; `make registry-cache` is a developer download | Add schema validation, cache TTL, pinning, offline fallback, and manual refresh. |
 | MCP Shim | Stub | `orchestrator_status` does not authenticate or tunnel | Require a session capability, implement framed IPC, and expose lifecycle tools. |
 | Orchestrator | Absent | No spawn tree, limits, budget, worktree, or child cancellation code | Implement after the direct Session path and security decisions are green. |
@@ -316,9 +316,9 @@ interface EffectiveSelection {
   - Everything an Agent worded — the session id most of all, since the Agent chooses it — is redacted against the values its process was started with before it becomes durable, and before records are compared, or every update would file as a new Session. Values and record counts are both bounded: an Agent picks its own session id, and a window can open a Session per Turn.
   - The parent id and worktree fields exist and stay empty until the Orchestrator fills them (Task 13).
   - `src/core/session.ts` needed no change: everything a record holds was already exposed. `src/vscode/config.ts` needed none either — `fileStorage` was already the durable-storage port.
-- [ ] On startup, list resumable metadata; load only on explicit user action unless `resumeOnStartup` is enabled and trust still holds.
+- [x] On startup, list resumable metadata; load only on explicit user action unless `resumeOnStartup` is enabled and trust still holds.
   - The decision is implemented and tested, and fails closed four ways: a Runtime that is gone, a launch whose fingerprint no longer matches what that conversation ran under, a folder this window has not opened, and an Agent this Client cannot reattach to. Nothing is resumed at startup unless the setting says so, and then one Session at most.
-  - Nothing calls it. Listing saved Sessions and offering one back is the Sessions tree's, so `agentConductor.sessions.resumeOnStartup` still has no consumer and stays on the list of settings nothing acts on — with its reason corrected, since sessions *are* persisted now.
+  - The consumer arrived with the Sessions tree, so the setting is off the list of ones nothing acts on. It is read where it is acted on rather than cached, and the decision is re-derived against what holds at that moment.
 - [x] Re-send sorted MCP servers and capability-supported directories on load.
   - Already true and already pinned in the ACP client tests; confirmed rather than reimplemented.
 - [x] Run `node --import tsx --test src/test/unit/session_store.test.ts`; expect pass. Commit: `feat: persist resumable session metadata`.
@@ -328,12 +328,28 @@ interface EffectiveSelection {
 
 ### Task 11: Add the Sessions tree and actions
 
-**Files:** Create `src/vscode/sessionsTree.ts`; modify `src/vscode/composition.ts`, `package.json`; create integration tests.
+**Files:** Created `src/vscode/sessionsTree.ts`, `sessionRows.ts`, `sessionActions.ts`, `sessionLaunch.ts`, `clientPorts.ts`, `hostPorts.ts`, `participantPorts.ts`; modified `src/vscode/{composition,participant,spawnGate,sessionRecords}.ts`, `src/core/sessionStore.ts`, `package.json`; created `src/test/unit/session_{rows,row_sealing,hierarchy,navigation,actions,ownership,launch}.test.ts`, `client_ports.test.ts`, `src/test/session-fixtures.ts` and the sessions-tree extension-host suite; added the Sessions tree to `ARCHITECTURE.md`, `UBIQUITOUS.md`, `README.md` and a walkthrough page.
 
-- [ ] Render Session/Subagent hierarchy with Runtime, verified selection, cost/unknown, duration, state, and mismatch markers.
-- [ ] Wire new, cancel, cancel-all, resume, and open-worktree-diff commands to actual Session ownership.
-- [ ] Update on Session events without blocking the extension host; remove disposed Sessions predictably.
-- [ ] Run the sessions-tree extension-host tests; expect direct Session state and actions to pass. Commit: `feat: add session navigation`.
+- [x] Render Session/Subagent hierarchy with Runtime, verified selection, cost/unknown, duration, state, and mismatch markers.
+  - A row is keyed the way the store keys a record — Runtime, folder and session id — because an Agent chooses its own session id and nothing makes it unique across either. Keyed on the id alone, one of two Sessions is silently never drawn, and a Session nothing draws is one nothing can cancel.
+  - Live rows are drawn from the Session object and remembered ones from the record, never both. Records are written with nothing waiting on them, so a row fed by the file lags the Turn it is meant to be showing.
+  - Time means two different things and says so: a live row has been running for *X*, a remembered one was last active *X* ago. A record keeps when it was first and last written, and a Session resumed the next day keeps its original stamp — the span between them is not the time anybody spent in it.
+  - The lineage is walked to the top with a visited set rather than followed one step. A ring written into a file two windows share would otherwise leave every node a child of another and the view empty.
+  - Everything an Agent worded — the session id, both selections, the cost currency — passes the redaction a record passes, and everything drawn is sealed for a surface with no markdown of its own and bounded. What a row is *addressed* by stays raw, because a handle nothing answers to is a button that quietly does nothing.
+  - Nothing yet fills in lineage or worktrees; both are the Orchestrator's to record, and a test names them so that gaining a writer has to be deliberate.
+- [x] Wire new, cancel, cancel-all, resume, and open-worktree-diff commands to actual Session ownership.
+  - The commands are a table the composition root registers in a loop, so which command runs which action is something a test reads rather than a string it greps.
+  - Resuming goes through the participant that owns every other Session and the gate that starts every other Agent. Everything the row claimed is re-derived at the moment of the click through the same rule the row was drawn by — because the gate would otherwise refuse only *after* the live Session had been ended to make room for it.
+  - Worktree changes are shown through VS Code's own Git extension; a worktree is an ordinary checkout, and its changes are what Source Control already draws.
+- [x] Update on Session events without blocking the extension host; remove disposed Sessions predictably.
+  - Every moment what the window owns changes is one the view is told about — a Turn starting, a Turn ending, a cancel, a reattach, a disposal, a Session adopted — pinned as a sequence, because one operation passes several of those moments and a count cannot say which went missing.
+  - A row leaves when the process is gone, so a Session that died on its own goes as predictably as one that was disposed; the record that takes the row over is redrawn once the saves have settled, and a Session whose Agent died mid-Turn is recorded as having ended rather than as still taking one.
+  - An Update naming a Session this window does not hold is drawn and never adopted: anything else is a map an Agent can grow, and a figure drawn against a Session whose Agent never sent it.
+- [x] Run the sessions-tree extension-host tests; expect direct Session state and actions to pass. Commit: `feat: add session navigation`.
+  - The host runner takes a profile of its own per run. Without one the extension's global storage survived every invocation, so a suite read Sessions saved by the run before it and a gate green on a clean machine went red on the second.
+  - The suites share one participant and the last of them stops it, so the run asserts that the teardown test really is the last one registered rather than describing it in a comment.
+  - Sessions are remembered per machine, so a record says whether one is in use: the window running it re-writes the moment it last still had it, and its own id beside that. A Session stamped by another window within the last half-minute is not offered back. A stamp rather than a flag, because a window that is killed simply stops re-writing it — a flag would be one a crash leaves set, and coming back to a conversation a crash interrupted is what resuming is for.
+  - Found by six rounds of adversarial review and a mutation sweep of the new modules, and fixed: credentials read for a launch about to be refused; a live row that could not be told from its own record; a resume that ended the live Session before finding out it could not proceed; a row that went on saying `prompting` for the whole of a Turn; and a tooltip whose clamp cut off the one line saying why a Session could not be resumed.
 
 ### Task 12: Implement per-Session authenticated IPC and the Shim
 

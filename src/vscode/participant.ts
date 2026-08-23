@@ -1,20 +1,32 @@
 import type * as acp from "@agentclientprotocol/sdk";
-import type * as vscode from "vscode";
 import {
   ConductorSession,
   message,
   pickEffortChoices,
   pickModelChoices,
-  type LogPort,
-  type ModelHint,
-  type RuntimeQuirks,
 } from "../core/index.js";
 import { ChatSink, readBackLine, type ChatStream } from "./chatSink.js";
-import type { DiffDocuments } from "./diffDocs.js";
-import { asQuickItem, type FormHost, type QuickItem } from "./elicitation.js";
-import { clampForDisplay, MAX_DETAIL_CHARS, MAX_LABEL_CHARS, type Assert } from "./permissions.js";
+import { asQuickItem, type QuickItem } from "./elicitation.js";
+import {
+  failureText,
+  type CancelToken,
+  type ParticipantOptions,
+  type SavedSession,
+  type TurnRequest,
+  type TurnResult,
+} from "./participantPorts.js";
+import { clampForDisplay, MAX_DETAIL_CHARS, MAX_LABEL_CHARS } from "./permissions.js";
 import { renderUpdate } from "./render.js";
 import { inlineText, plainText } from "./sealing.js";
+
+export type {
+  CancelToken,
+  ParticipantOptions,
+  RuntimeChoice,
+  SavedSession,
+  TurnRequest,
+  TurnResult,
+} from "./participantPorts.js";
 
 /**
  * `@conductor`: one chat turn driving one direct Session (ARCHITECTURE.md
@@ -24,63 +36,6 @@ import { inlineText, plainText } from "./sealing.js";
  * layer is, so a turn can be driven end to end against a real Agent process
  * without an extension host. `vscode` is imported as a type only.
  */
-
-/** `vscode.CancellationToken`. */
-export interface CancelToken {
-  readonly isCancellationRequested: boolean;
-  onCancellationRequested(listener: () => unknown): { dispose(): unknown };
-}
-
-/** The part of `vscode.ChatRequest` the dispatcher reads. */
-export interface TurnRequest {
-  readonly prompt: string;
-  /** The slash command the user picked, without its slash. */
-  readonly command?: string | undefined;
-}
-
-/**
- * `vscode.ChatResult`. The stop reason is the Agent's own word for how the Turn
- * ended, carried through unchanged — a cancelled Turn reports `cancelled`, which
- * is also what the Client answers the Agent with.
- */
-export type TurnResult = {
-  readonly metadata: { readonly stopReason: string };
-  readonly errorDetails?: { readonly message: string };
-};
-
-// ---------------------------------------------------------------------------
-// The participant
-// ---------------------------------------------------------------------------
-
-export interface RuntimeChoice {
-  id: string;
-  label: string;
-  description?: string;
-}
-
-export interface ParticipantOptions {
-  /** Opens a trusted Session; `openTrustedSession` with the host's ports bound. */
-  open(
-    runtimeId: string,
-    onUpdate: (notification: acp.SessionNotification) => void,
-  ): Promise<ConductorSession>;
-  /** Runtimes the user may switch between, in display order. */
-  runtimes(): Promise<RuntimeChoice[]>;
-  /** `agentConductor.defaultRuntime`, read per turn so a change takes effect. */
-  defaultRuntimeId(): string;
-  pick: FormHost["pick"];
-  diffs: DiffDocuments;
-  /** `agentConductor.ui.showThinking`, read per turn. */
-  showThinking(): boolean;
-  /** `agentConductor.ui.slashCommandAllowlist`, read per turn. */
-  slashCommands?(): readonly string[];
-  /** Picker fallback for a Runtime whose Agent exposes no Config Option. */
-  modelCatalog?(runtimeId: string): ModelHint[];
-  /** Traits of the Runtime behind a Session, for telling the user why there is
-   *  nothing to set. Absent leaves the message the weaker of the two. */
-  runtimeQuirks?(runtimeId: string): RuntimeQuirks | undefined;
-  log?: LogPort;
-}
 
 const REFUSED = "refused";
 const STOPPED = "Agent Conductor is shutting down; no session can be started.";
@@ -114,6 +69,13 @@ export class ConductorParticipant {
   #generation = 0;
   /** Teardown has happened; no further Session may be opened. */
   #stopped = false;
+  /** The saved Session the next open must reattach to, set only for the moment
+   *  `resume` is opening one. An ordinary prompt always creates a new Session. */
+  #loading?: SavedSession;
+  /** A `resume` holds the participant for as long as it takes to start an Agent
+   *  and reattach. Told apart from a Turn because what a user has to do about it
+   *  is different: there is nothing to cancel, and waiting is the whole answer. */
+  #reopening = false;
   /** Titles by tool call id, so a status-only update still names its call. */
   readonly #toolTitles = new Map<string, string>();
 
@@ -134,11 +96,14 @@ export class ConductorParticipant {
     // the only one that neither starts a Session nor waits on the user.
     const exclusive = request.command !== "cancel";
     if (this.#busy && exclusive) {
-      const text = "This session is already running a turn — cancel it with /cancel first.";
+      const text = this.#reopening
+        ? "A saved session is being reopened; this prompt was not sent — send it again once it is open."
+        : "This session is already running a turn — cancel it with /cancel first.";
       stream.markdown(text);
       return { metadata: { stopReason: REFUSED }, errorDetails: { message: text } };
     }
     if (exclusive) this.#busy = true;
+    this.#changed();
     try {
       switch (request.command) {
         case "runtime":
@@ -157,12 +122,60 @@ export class ConductorParticipant {
       return { metadata: { stopReason: REFUSED }, errorDetails: { message: text } };
     } finally {
       if (exclusive) this.#busy = false;
+      this.#changed();
     }
   }
 
-  /** Cancels the Turn in flight, if there is one. Safe when there is not. */
-  async cancel(): Promise<void> {
-    if (this.#session?.state === "prompting") await this.#session.cancel();
+  /**
+   * Cancels the Turn in flight, if there is one. Safe when there is not.
+   *
+   * With a Session id, only that Session's Turn is cancelled — the Sessions tree
+   * cancels the row a user picked, and this participant owns one Session at a
+   * time, so a id that is not the live one cancels nothing rather than the
+   * wrong thing.
+   */
+  async cancel(sessionId?: string): Promise<void> {
+    const session = this.#session;
+    if (!session || (sessionId !== undefined && session.sessionId !== sessionId)) return;
+    if (session.state === "prompting") await session.cancel();
+    this.#changed();
+  }
+
+  /**
+   * Reattaches to a saved Session and makes it the live one (`session/load`).
+   *
+   * Through this participant rather than beside it: a Session opened anywhere
+   * else would be a second owner of an Agent process, and the process a second
+   * owner starts is one teardown cannot stop (ADR-0008). The live Session is
+   * ended first, for the same reason `/runtime` ends it — one process per
+   * Session, for its whole life.
+   */
+  async resume(saved: SavedSession): Promise<void> {
+    if (this.#busy) {
+      throw new Error("This session is already running a turn — cancel it with /cancel first.");
+    }
+    this.#busy = true;
+    this.#reopening = true;
+    const previous = this.#runtimeId;
+    let attached = false;
+    try {
+      await this.dispose();
+      this.#runtimeId = saved.runtimeId;
+      this.#loading = saved;
+      await this.#live();
+      attached = true;
+    } finally {
+      // Cleared whatever happened: a failed reattach must not make the next
+      // ordinary prompt try to load a Session the Agent has already refused.
+      this.#loading = undefined;
+      // And the Runtime goes back where it was unless the reattach worked. A
+      // failure that kept it would move the user to another CLI for the rest of
+      // the window, silently, on the strength of a click that did nothing.
+      if (!attached) this.#runtimeId = previous;
+      this.#reopening = false;
+      this.#busy = false;
+      this.#changed();
+    }
   }
 
   /**
@@ -211,6 +224,10 @@ export class ConductorParticipant {
       if (opening) await opening.catch(() => undefined);
       this.#sink = undefined;
     }
+    // Neither branch above can throw — a Session's disposal is memoized and
+    // catches, and a rejected open is swallowed — so what draws this is told
+    // once, here, rather than from a guard that could never fire.
+    this.#changed();
   }
 
   async #prompt(prompt: string, stream: ChatStream, token: CancelToken): Promise<TurnResult> {
@@ -234,9 +251,22 @@ export class ConductorParticipant {
       ...(this.#options.log ? { log: this.#options.log } : {}),
     });
     this.#sink = sink;
-    const subscription = token.onCancellationRequested(() => void session.cancel());
+    const subscription = token.onCancellationRequested(() => {
+      // This Session, not whichever is live: a disposal during the Turn may have
+      // replaced it, and cancelling the wrong one is worse than cancelling none.
+      // `cancel` moves it to `cancelling` before it yields, so saying so here is
+      // saying something true.
+      void session.cancel();
+      this.#changed();
+    });
     try {
-      const response = await session.prompt(prompt);
+      // Started, then said, then awaited. `prompt` moves the Session to
+      // `prompting` before it yields, so this is the one moment anything drawing
+      // this participant can learn that a Turn is under way — told only when it
+      // is over, a Sessions tree would say `idle` for the whole of it.
+      const turn = session.prompt(prompt);
+      this.#changed();
+      const response = await turn;
       return { metadata: { stopReason: response.stopReason } };
     } catch (error) {
       const text = failureText(error);
@@ -259,9 +289,13 @@ export class ConductorParticipant {
       // Told apart on purpose: a turn still starting its Agent has nothing to
       // cancel yet, and saying "nothing is running" to somebody who was just
       // told to cancel it would be the opposite of an explanation.
-      stream.markdown(this.#busy
-        ? "The turn is still starting its agent; there is no turn to cancel yet."
-        : "There is nothing running to cancel.");
+      stream.markdown(
+        this.#reopening
+          ? "A saved session is being reopened; there is no turn to cancel yet."
+          : this.#busy
+            ? "The turn is still starting its agent; there is no turn to cancel yet."
+            : "There is nothing running to cancel.",
+      );
       return { metadata: { stopReason: DONE } };
     }
     await this.cancel();
@@ -283,8 +317,13 @@ export class ConductorParticipant {
     const picked = await this.#choose(
       runtimes,
       (runtime) => ({
-        label: clampForDisplay(runtime.label, MAX_LABEL_CHARS),
-        ...(runtime.description ? { description: runtime.description } : {}),
+        // Both sealed: a Runtime's label and the reason shown against it are
+        // settings text, and `agentConductor.runtimes` is a scope a repository
+        // can write (ADR-0007).
+        label: clampForDisplay(plainText(runtime.label).trim(), MAX_LABEL_CHARS),
+        ...(runtime.description
+          ? { description: clampForDisplay(plainText(runtime.description).trim(), MAX_DETAIL_CHARS) }
+          : {}),
       }),
       { title: "Runtime for this session", placeHolder: "Pick the CLI to run" },
     );
@@ -382,14 +421,15 @@ export class ConductorParticipant {
    * owns — one process, owned for its whole life — hold for any caller, because
    * the process a second open would start is one nothing afterwards can stop.
    */
-  async #live(stream: ChatStream): Promise<ConductorSession> {
-    if (this.#stopped) throw new Error(STOPPED);
+  async #live(stream?: ChatStream): Promise<ConductorSession> {
     const existing = this.#session;
     if (existing && existing.state !== "failed" && existing.state !== "disposed") return existing;
     if (existing) await this.dispose();
-    // Asked again after the wait: teardown lands inside it, the participant
-    // looks quiet from the outside while it does, and what follows starts a
-    // process.
+    // Asked here and only here. A check before the wait as well would be one no
+    // test could ever fail on, because this one catches the same call: what has
+    // to be true is that nothing starts a process *after* teardown, and teardown
+    // lands inside the wait above — the participant looks quiet from the outside
+    // while it does, and what follows starts a process (ADR-0008).
     if (this.#stopped) throw new Error(STOPPED);
     if (!this.#opening) {
       const opening = this.#openSession(stream);
@@ -404,22 +444,46 @@ export class ConductorParticipant {
     return this.#opening;
   }
 
-  async #openSession(stream: ChatStream): Promise<ConductorSession> {
+  async #openSession(stream?: ChatStream): Promise<ConductorSession> {
     const generation = this.#generation;
+    const load = this.#loading;
     const runtimeId = this.#runtimeId ?? this.#options.defaultRuntimeId();
     // A Runtime id is a settings key, and `agentConductor.runtimes` is a scope a
     // repository can write — so this is its text, drawn before anything about it
     // has been trusted (ADR-0007). Sealed like any other, and a progress line is
     // rendered as markdown whatever its signature suggests.
-    stream.progress(`Starting ${inlineText(runtimeId, MAX_LABEL_CHARS)}…`);
-    const session = await this.#options.open(runtimeId, (notification) => this.#onUpdate(notification));
+    stream?.progress(`Starting ${inlineText(runtimeId, MAX_LABEL_CHARS)}…`);
+    const session = await this.#options.open(
+      runtimeId,
+      (notification) => this.#onUpdate(notification),
+      load,
+    );
     if (generation !== this.#generation) {
       await session.dispose();
       throw new Error(`runtime ${runtimeId}: the session was ended while it was starting`);
     }
     this.#session = session;
     this.#runtimeId = runtimeId;
+    this.#changed();
     return session;
+  }
+
+  /** Tells whatever draws this participant that what it owns has moved. Never
+   *  throws into a Turn: a drawing surface is not allowed to fail one. */
+  #changed(): void {
+    try {
+      this.#options.onChanged?.();
+    } catch (error) {
+      // Logging is itself a call into the window — it re-reads the configured
+      // level — so it goes inside the guard too. A catch that can throw is not
+      // one, and this one is called from a Turn's `finally`, where a throw would
+      // replace what the Turn was about to answer.
+      try {
+        this.#options.log?.log("error", `sessions view refused an update: ${message(error)}`);
+      } catch {
+        // Nothing left to tell.
+      }
+    }
   }
 
   /**
@@ -434,36 +498,3 @@ export class ConductorParticipant {
     }
   }
 }
-
-/**
- * A failure, as it may be drawn.
- *
- * Most of what these say is the Agent's own text, written straight after words
- * this Client put in bold. So it is bounded, kept to one line, and stripped of
- * the markers that make text look like ours: an Agent answering with a rule and
- * a heading of its own would otherwise appear to be us (ADR-0007).
- */
-function failureText(error: unknown): string {
-  // An `_` between two word characters is kept, and every other one goes. These
-  // messages name environment variables, settings keys and paths, and one drawn
-  // as `MOCKSECRET` sends the reader looking for something that does not exist —
-  // while `_Now running:_` is how this Client writes its own asides, and an
-  // Agent's words are drawn straight after our bold. Markdown cannot emphasise
-  // an underscore inside a word, so keeping those costs nothing. Flattening
-  // already defeats every block-level construct, since the text is appended
-  // mid-line. Links go through the one rule there is — see `sealing.ts`.
-  // The underscores go first, and everything else is the one sealing there is.
-  // First, because removing a character can put a link back together — `http:_//`
-  // is not an address until the `_` is gone — and `plainText` breaks links last.
-  const said = message(error).replace(/(?<![A-Za-z0-9])_+|_+(?![A-Za-z0-9])/g, "");
-  return clampForDisplay(plainText(said).trim(), MAX_DETAIL_CHARS);
-}
-
-/** The chat ports still are the VS Code API they stand for; see `config.ts`. */
-export type ChatPortsMatchVsCodeApi = [
-  Assert<vscode.CancellationToken extends CancelToken ? true : false>,
-  Assert<vscode.ChatRequest extends TurnRequest ? true : false>,
-  Assert<TurnResult extends vscode.ChatResult ? true : false>,
-  // The gate's own self-test: a member VS Code does not implement is rejected.
-  Assert<vscode.ChatRequest extends { sparkle: string } ? false : true>,
-];

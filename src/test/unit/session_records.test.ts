@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readdir, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test, type TestContext } from "node:test";
@@ -59,6 +59,7 @@ test("a Session whose launch identity is unknown is not written down", async (t)
     runtimeId: "claude",
     workspace: "/repo",
     secrets: [],
+    window: "this-window",
   });
 
   await written(storage);
@@ -91,6 +92,7 @@ test("a Session is written down when it opens and again when its process ends", 
     fingerprint: "fp-1",
     workspace: "/repo",
     secrets: [],
+    window: "this-window",
   });
   await written(storage);
   assert.deepEqual(
@@ -117,6 +119,7 @@ test("a Session whose Agent never offered to load one is written down as unresum
     fingerprint: "fp-1",
     workspace: "/repo",
     secrets: [],
+    window: "this-window",
   });
 
   await written(storage);
@@ -139,6 +142,7 @@ test("a Session that cannot be written down says so in the log and nothing else"
     fingerprint: "fp-1",
     workspace: "/repo",
     secrets: [],
+    window: "this-window",
   });
 
   await written(refusing);
@@ -160,9 +164,135 @@ test("a Session started with a credential does not log one when saving fails", a
     fingerprint: "fp-1",
     workspace: "/repo",
     secrets: [key],
+    window: "this-window",
   });
 
   await written(refusing);
   assert.equal(log.lines.join("\n").includes(key), false);
   assert.match(log.lines.join("\n"), /\[redacted\]/);
+});
+
+test("an agent that died mid-turn is not remembered as still taking one", async (t) => {
+  const home = await directory(t);
+  const storage = fileStorage(home);
+  let died = (): void => undefined;
+  const exited = new Promise<AgentExit>((settle) => {
+    died = () => settle({ code: null, signal: "SIGSEGV" });
+  });
+  // What a crash leaves behind: the process is gone, and nothing has yet moved
+  // the Session off the state it was in when it went.
+  const session = live({ state: "prompting", exited });
+
+  remember(session, storage, logged().port, {
+    runtimeId: "claude",
+    fingerprint: "fp",
+    workspace: "/repo",
+    secrets: [],
+    window: "this-window",
+  });
+  died();
+  await written(storage);
+
+  const [saved] = await readSessions(storage);
+  // Not `prompting`: a record is how a Session ended, and a Session whose
+  // process is gone is not still taking a turn. Left as it was, every window
+  // afterwards draws that row as one still working, for good.
+  assert.equal(saved.state, "failed");
+});
+
+/**
+ * Fields a record has room for and nothing yet fills in, with the reason.
+ *
+ * A field with no writer is a surface that draws nothing — the Sessions tree
+ * nests Subagents under their parent and offers a worktree's changes, and both
+ * are unreachable while these stay empty. Named here so that gaining a writer
+ * has to be a deliberate change to this list, and so the docs that describe
+ * those surfaces can be corrected in the same breath.
+ */
+const NO_WRITER_YET: Record<string, string> = {
+  parentSessionId: "nothing spawns a Subagent yet",
+  worktree: "nothing creates a worktree yet",
+};
+
+/** Every `.ts` file beneath a directory, as `[name, text]`. */
+async function sources(root: URL): Promise<(readonly [string, string])[]> {
+  const entries = await readdir(root, { withFileTypes: true });
+  const found = await Promise.all(
+    entries.map(async (entry) => {
+      const at = new URL(`${entry.name}${entry.isDirectory() ? "/" : ""}`, root);
+      if (entry.isDirectory()) return entry.name === "test" ? [] : sources(at);
+      return entry.name.endsWith(".ts") ? [[entry.name, await readFile(at, "utf8")] as const] : [];
+    }),
+  );
+  return found.flat();
+}
+
+test("a record field nothing fills in is one this client admits to", async () => {
+  // Every source file under the two layers, at any depth: a writer put in a
+  // subdirectory is exactly the one this list would otherwise miss.
+  const files = await sources(new URL("../../", import.meta.url));
+
+  // One writer, found rather than assumed: a second would be a second place for
+  // this list to be wrong.
+  const writers = files
+    .filter(([name, text]) => name !== "sessionStore.ts" && text.includes("saveSession("))
+    .map(([name]) => name);
+  assert.deepEqual(writers, ["sessionRecords.ts"]);
+
+  const written = files.find(([name]) => name === "sessionRecords.ts")?.[1] ?? "";
+  const filled = Object.keys(NO_WRITER_YET).filter((field) => written.includes(`${field}:`));
+  assert.deepEqual(filled, [], `${filled.join(", ")} gained a writer without this list being updated`);
+
+  // And the live half of a row, which does not go through a record at all.
+  // Matched against the whole file rather than one call's inline literal: an
+  // object hoisted to a variable would slip past a pattern anchored on `track(`,
+  // and this list would go on claiming a field nothing fills in.
+  const composition = files.find(([name]) => name === "composition.ts")?.[1] ?? "";
+  assert.doesNotMatch(composition, /worktree/);
+});
+
+test("a turn somebody stopped is not remembered as one that broke", async (t) => {
+  const home = await directory(t);
+  const storage = fileStorage(home);
+  let stopped = (): void => undefined;
+  const exited = new Promise<AgentExit>((settle) => {
+    stopped = () => settle({ code: 0, signal: null });
+  });
+
+  remember(live({ state: "cancelling", exited }), storage, logged().port, {
+    runtimeId: "claude",
+    fingerprint: "fp",
+    workspace: "/repo",
+    secrets: [],
+    window: "this-window",
+  });
+  stopped();
+  await written(storage);
+
+  // An Agent that answers `session/cancel` by exiting leaves the Session on
+  // `cancelling`. That is a Session somebody stopped, and drawing it afterwards
+  // as broken says something about the Agent that is not true.
+  assert.equal((await readSessions(storage))[0].state, "disposed");
+});
+
+test("what was asked for beside what the agent reported is part of the record", async (t) => {
+  const home = await directory(t);
+  const storage = fileStorage(home);
+
+  remember(
+    live({
+      modelSelection: { requested: "opus", effective: "sonnet", verification: "verified" },
+      effortSelection: { requested: "high", verification: "unavailable" },
+    }),
+    storage,
+    logged().port,
+    { runtimeId: "claude", fingerprint: "fp", workspace: "/repo", secrets: [], window: "w" },
+  );
+  await written(storage);
+
+  // Both halves of a Read-back, and the record is the only thing that carries
+  // them past the end of the window (ADR-0005).
+  const [saved] = await readSessions(storage);
+  assert.deepEqual(saved.model, { requested: "opus", effective: "sonnet", verification: "verified" });
+  assert.deepEqual(saved.effort, { requested: "high", verification: "unavailable" });
 });

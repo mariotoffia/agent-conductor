@@ -15,9 +15,10 @@ import type { ChatCommand } from "../../../vscode/chatSink.js";
  * The participant is driven through the test hooks rather than through chat,
  * because VS Code offers no way to send a chat participant a turn.
  *
- * These run in order and the last one is terminal: it stops the participant for
- * good, which is what teardown means. A fourth test appended after it would be
- * refused rather than fail on its own terms — put new ones above it.
+ * These run in order, and the participant they drive is the host's only one and
+ * is shared with the suites after this. So this suite ends its Session without
+ * stopping the participant: stopping is final, and the suite that runs last owns
+ * it — today `sessions_tree.test.ts`, which ends with the teardown test.
  */
 
 const EXTENSION_ID = "mariotoffia.agent-conductor";
@@ -88,9 +89,8 @@ suite("a direct session in the extension host", () => {
     });
   });
 
-  suiteTeardown(async () => {
+  suiteTeardown(() => {
     hooks.useConsent(undefined);
-    await hooks.participant.stop();
   });
 
   test("a turn is refused until the runtime's identity is approved", async () => {
@@ -117,6 +117,9 @@ suite("a direct session in the extension host", () => {
     // Permission: the agent's tool call reached the host's consent surface, and
     // the answer decided how the call was reported.
     assert.equal(asked.length, 1, `consent was asked ${asked.length} times`);
+    // Named after the Runtime this Session runs, so the dialog says which agent
+    // wants this rather than a word that would be true of any of them.
+    assert.match(asked[0], /^mock \(custom\) asks:/);
     assert.match(out.text(), /Edit mock file/);
     assert.match(out.text(), /✅/);
     // Read-back: what the agent reports it is running, not what was asked for.
@@ -140,13 +143,4 @@ suite("a direct session in the extension host", () => {
     assert.equal(tab.input.modified.scheme, "agent-conductor-diff");
   });
 
-  test("teardown ends the session and drops what it retained", async () => {
-    assert.ok(hooks.participant.currentSessionId, "a session should still be open");
-    assert.ok(hooks.diffs.size > 0);
-
-    await hooks.participant.stop();
-
-    assert.equal(hooks.participant.currentSessionId, undefined);
-    assert.equal(hooks.diffs.size, 0);
-  });
 });

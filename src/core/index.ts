@@ -10,5 +10,6 @@ export * from "./acpClient.js";
 export * from "./sessionSpec.js";
 export * from "./session.js";
 export * from "./sessionStore.js";
+export * from "./sessionResume.js";
 export * from "./executables.js";
 export * from "./connect.js";

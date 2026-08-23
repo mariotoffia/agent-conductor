@@ -1,5 +1,6 @@
 import type * as acp from "@agentclientprotocol/sdk";
 import {
+  HELD_BEAT_MS,
   message,
   redactSecrets,
   saveSession,
@@ -7,6 +8,8 @@ import {
   type ConductorSession,
   type EffectiveSelection,
   type LogPort,
+  systemClock,
+  type ClockPort,
   type SessionState,
   type StoragePort,
 } from "../core/index.js";
@@ -52,7 +55,16 @@ export function remember(
   session: RecordedSession,
   storage: StoragePort,
   log: LogPort,
-  about: { runtimeId: string; fingerprint?: string; workspace: string; secrets: string[] },
+  about: {
+    runtimeId: string;
+    fingerprint?: string;
+    workspace: string;
+    secrets: string[];
+    /** This window's id, written beside the hold below. */
+    window: string;
+    /** Drives the heartbeat below; the system clock when nothing supplies one. */
+    clock?: ClockPort;
+  },
 ): void {
   // Without the fingerprint the Session ran under there is nothing to re-derive
   // resumability from later, so there is nothing worth writing down.
@@ -60,7 +72,8 @@ export function remember(
   if (!fingerprint) return;
   // Wrapped, so a throw from reading the Session becomes a rejection this
   // catches rather than one nobody is waiting for.
-  const save = (): void => {
+  const clock = about.clock ?? systemClock;
+  const save = (ended = false): void => {
     void (async () =>
       saveSession(
         storage,
@@ -69,7 +82,11 @@ export function remember(
           runtimeId: about.runtimeId,
           fingerprint,
           workspace: about.workspace,
-          state: session.state,
+          state: ended ? endedState(session.state) : session.state,
+          // Said while the Session is still open, and left unsaid once it is
+          // not: another window reads this to tell a Session that ended from one
+          // this window is still running (ADR-0008).
+          ...(ended ? {} : { heldAt: Date.now(), heldBy: about.window }),
           // Both ways back into a session — `session/load` and `session/resume`
           // — take the id and nothing secret, so the id is the handle. This
           // Client sends the first and only the first, so that is the gate.
@@ -88,5 +105,39 @@ export function remember(
     });
   };
   save();
-  void session.exited.then(save);
+  // Said again while the Session lives, so that a window which is killed simply
+  // stops saying it. A flag set once and cleared on the way out would be a flag
+  // a crash leaves set for ever, and the conversation it named unreachable.
+  let stopBeating = (): void => undefined;
+  const beat = (): void => {
+    stopBeating = clock.after(HELD_BEAT_MS, () => {
+      save();
+      beat();
+    });
+  };
+  beat();
+  void session.exited.then(() => {
+    stopBeating();
+    save(true);
+  });
+}
+
+/**
+ * How a Session ended, once its process is gone.
+ *
+ * A Session that was taking a Turn when its Agent died is left on `prompting`:
+ * the Session's own exit handler only promotes the states it can be sure about,
+ * and the Turn's failure lands later, after the record has been written. Left
+ * as it was, the record says a Turn is under way and every window afterwards
+ * draws that row as one still working — for good, because there is no third
+ * write. A process that is gone ended the Session, whatever it was doing.
+ *
+ * A Session on `cancelling` ended because somebody asked it to, whichever side
+ * did the stopping — an Agent may answer `session/cancel` by exiting. Recording
+ * that as a failure would draw a broken icon over a Turn that did what it was
+ * told.
+ */
+function endedState(state: SessionState): SessionState {
+  if (state === "disposed" || state === "failed") return state;
+  return state === "cancelling" ? "disposed" : "failed";
 }

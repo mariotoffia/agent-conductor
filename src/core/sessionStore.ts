@@ -69,6 +69,19 @@ export const MAX_RECORD_CHARS = 1024;
  *  otherwise grow this file for as long as the extension is installed. */
 export const MAX_SESSIONS = 200;
 
+/**
+ * How long a window's word that it still holds a Session is believed.
+ *
+ * Several heartbeats, so an ordinary pause — a busy machine, a save queued
+ * behind another — never makes a live Session look abandoned. What it costs is
+ * how long after a window is killed its Sessions stay unofferable.
+ */
+export const HELD_STALE_MS = 30_000;
+
+/** How often a window says it still has a Session open. Comfortably inside
+ *  `HELD_STALE_MS`, so missing one changes nothing. */
+export const HELD_BEAT_MS = 10_000;
+
 /** Ceiling on the file itself, applied before it is parsed: what the two caps
  *  above allow, with room to spare, and far less than a host should ever hold. */
 export const MAX_SESSIONS_TEXT = 4 * 1024 * 1024;
@@ -94,6 +107,32 @@ export interface SessionFacts {
   /** The Session that spawned this one, for the Subagent tree. */
   parentSessionId?: string;
   worktree?: { path: string; branch: string };
+  /**
+   * When the window holding this Session last said it still had it open.
+   *
+   * Sessions are remembered per machine, and two windows share one store — so
+   * without this a Session another window is running is offered back here as one
+   * that ended, and picking it up runs two Agents on one conversation, which is
+   * the thing one process per Session exists to prevent (ADR-0008).
+   *
+   * A stamp rather than a flag, because the two questions have one answer: a
+   * window that is still there re-stamps it, and a window that was killed stops.
+   * A flag left set by a crash would make that Session unresumable for ever, and
+   * coming back to a conversation a crash interrupted is what resuming is for.
+   * Absent means nobody holds it — an older record, or one whose window wrote
+   * that the Session had ended.
+   */
+  heldAt?: number;
+  /**
+   * Which window said it. Its own hold is the one hold that must not stop it:
+   * a record is stamped from the moment a Session opens until it is written
+   * down as ended, and in between that window's own row is its to act on.
+   *
+   * Opaque and made afresh per activation, so a window that was killed comes
+   * back as a different one and its old hold reads as somebody else's — which
+   * is what makes the stamp age out rather than be believed for ever.
+   */
+  heldBy?: string;
 }
 
 /** One saved Session: the facts, plus when they were first and last written. */
@@ -141,6 +180,8 @@ const record = z.object({
   effort: selection.optional(),
   parentSessionId: text.optional(),
   worktree: z.object({ path: text, branch: text }).optional(),
+  heldAt: z.number().int().nonnegative().optional(),
+  heldBy: text.optional(),
   createdAt: z.number().int().nonnegative(),
   updatedAt: z.number().int().nonnegative(),
 });
@@ -322,6 +363,12 @@ function persisted(facts: SessionFacts, now: number, secrets: string[]): Persist
     loadable: facts.loadable,
     ...(facts.model ? { model: safely(facts.model) } : {}),
     ...(facts.effort ? { effort: safely(facts.effort) } : {}),
+    // A number this Client stamped, so it passes no redaction — there is nothing
+    // in it an Agent chose.
+    // Numbers and an id this Client made, so neither passes a redaction — there
+    // is nothing in either that an Agent chose.
+    ...(facts.heldAt === undefined ? {} : { heldAt: facts.heldAt }),
+    ...(facts.heldBy === undefined ? {} : { heldBy: facts.heldBy }),
     ...(facts.parentSessionId ? { parentSessionId: safe(facts.parentSessionId) } : {}),
     ...(facts.worktree
       ? { worktree: { path: safe(facts.worktree.path), branch: safe(facts.worktree.branch) } }
@@ -361,87 +408,4 @@ function sameSession(left: SessionFacts, right: SessionFacts): boolean {
     left.runtimeId === right.runtimeId &&
     left.workspace === right.workspace
   );
-}
-
-// ---------------------------------------------------------------------------
-// Whether a saved Session may be reattached to. Pure, and told what is true
-// rather than reading it: the settings, the trust store and the open folders all
-// live on the other side of the seam, and a rule that fetches its own inputs is
-// one no test can put in a state (ADR-0003).
-// ---------------------------------------------------------------------------
-
-/** What is true in this window right now. */
-export interface ResumeConditions {
-  /**
-   * Runtime id to the Runtime Trust fingerprint it resolves to now. A Runtime
-   * that is absent is one this window cannot start at all — unconfigured,
-   * unavailable, or never approved.
-   */
-  fingerprints: ReadonlyMap<string, string>;
-  /** Absolute workspace roots open in this window. */
-  workspaces: readonly string[];
-}
-
-/** Why a saved Session cannot be reattached to. */
-export type ResumeBlock =
-  | "runtime-gone"
-  | "trust-changed"
-  | "workspace-closed"
-  | "agent-cannot-load";
-
-/**
- * What stands between a saved Session and `session/load`, or `undefined` when
- * nothing does.
- *
- * Re-derived every time from what holds now, never read off the record: trust
- * recorded once is trust that outlives the launch it was granted for, which is
- * the whole reason `ResolvedRuntime` re-earns it per spawn (ADR-0007).
- *
- * It does not know which Sessions this window already owns. A caller holding
- * live Sessions leaves them out, or it will offer to open a second process for a
- * conversation it is already in.
- */
-export function resumeBlock(
-  session: PersistedSession,
-  conditions: ResumeConditions,
-): ResumeBlock | undefined {
-  const fingerprint = conditions.fingerprints.get(session.runtimeId);
-  if (fingerprint === undefined) return "runtime-gone";
-  if (fingerprint !== session.fingerprint) return "trust-changed";
-  // `session/load` re-sends the `cwd` it was created with, and an Agent may
-  // refuse a different one. A folder nobody opened is also a folder nobody
-  // agreed to run an Agent in.
-  if (!conditions.workspaces.includes(session.workspace)) return "workspace-closed";
-  // Not "the protocol offers no way back": ACP also defines `session/resume`,
-  // which this Client does not send. What is being asked is whether *we* can
-  // reattach, and the answer has to be about what we actually do.
-  if (!session.loadable) return "agent-cannot-load";
-  return undefined;
-}
-
-/** The saved Sessions that could be reattached to now, most recent first. */
-export function resumableSessions(
-  sessions: readonly PersistedSession[],
-  conditions: ResumeConditions,
-): PersistedSession[] {
-  return [...sessions]
-    .filter((session) => resumeBlock(session, conditions) === undefined)
-    .sort((left, right) => right.updatedAt - left.updatedAt);
-}
-
-/**
- * The one Session, if any, that opening a folder may start an Agent for.
- *
- * Off unless `agentConductor.sessions.resumeOnStartup` says otherwise, because
- * activating an extension is not a request to run anything. One at most, and
- * only the most recent: a window that opened an Agent per saved Session would
- * turn a setting into a fork bomb with a friendly name.
- */
-export function startupResume(
-  sessions: readonly PersistedSession[],
-  conditions: ResumeConditions,
-  resumeOnStartup: boolean,
-): PersistedSession | undefined {
-  if (!resumeOnStartup) return undefined;
-  return resumableSessions(sessions, conditions)[0];
 }

@@ -68,11 +68,27 @@
       },
       {
         "command": "agentConductor.cancelAll",
-        "title": "Agent Conductor: Cancel All Sessions"
+        "title": "Agent Conductor: Cancel All Sessions",
+        "icon": "$(stop-circle)"
       },
       {
         "command": "agentConductor.refreshRegistry",
         "title": "Agent Conductor: Refresh ACP Agent Registry"
+      },
+      {
+        "command": "agentConductor.cancelSession",
+        "title": "Agent Conductor: Cancel Session",
+        "icon": "$(stop-circle)"
+      },
+      {
+        "command": "agentConductor.resumeSession",
+        "title": "Agent Conductor: Resume Session",
+        "icon": "$(debug-restart)"
+      },
+      {
+        "command": "agentConductor.openWorktreeDiff",
+        "title": "Agent Conductor: Open Worktree Changes",
+        "icon": "$(git-compare)"
       }
     ],
     "viewsContainers": {
@@ -99,6 +115,42 @@
           "command": "agentConductor.newSession",
           "when": "view == agentConductor.sessions",
           "group": "navigation"
+        },
+        {
+          "command": "agentConductor.cancelAll",
+          "when": "view == agentConductor.sessions",
+          "group": "navigation"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "agentConductor.cancelSession",
+          "when": "view == agentConductor.sessions && viewItem =~ /^agentConductor\\.session\\.live/",
+          "group": "inline"
+        },
+        {
+          "command": "agentConductor.resumeSession",
+          "when": "view == agentConductor.sessions && viewItem =~ /^agentConductor\\.session\\.resumable/",
+          "group": "inline"
+        },
+        {
+          "command": "agentConductor.openWorktreeDiff",
+          "when": "view == agentConductor.sessions && viewItem =~ /\\.worktree$/",
+          "group": "inline"
+        }
+      ],
+      "commandPalette": [
+        {
+          "command": "agentConductor.cancelSession",
+          "when": "false"
+        },
+        {
+          "command": "agentConductor.resumeSession",
+          "when": "false"
+        },
+        {
+          "command": "agentConductor.openWorktreeDiff",
+          "when": "false"
         }
       ]
     },
@@ -133,6 +185,14 @@
             "description": "Open Chat and mention **@conductor**.",
             "media": {
               "markdown": "walkthrough/chat.md"
+            }
+          },
+          {
+            "id": "sessions",
+            "title": "Find a session again",
+            "description": "Every session this window has, live or remembered.\n[Open the Sessions view](command:workbench.view.extension.agentConductor)",
+            "media": {
+              "markdown": "walkthrough/sessions.md"
             }
           },
           {

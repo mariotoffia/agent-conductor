@@ -1,4 +1,7 @@
+import assert from "node:assert/strict";
+import * as vscode from "vscode";
 import Mocha from "mocha";
+import type { ConductorTestHooks } from "../../../vscode/composition.js";
 
 /**
  * Entry point VS Code loads as `--extensionTestsPath`.
@@ -17,11 +20,18 @@ export async function run(): Promise<void> {
   // Installing the interface by hand is what lets the tests register themselves
   // when they are imported, which must therefore happen after this line.
   mocha.suite.emit("pre-require", globalThis, "", mocha);
+  // Order matters. These suites share one participant — the host has exactly one
+  // — and it remembers the Runtime it was last given, so the direct-session
+  // suite has to run first: its opening test is that a Runtime nobody approved
+  // is refused. The suite that runs last is the one that stops the participant,
+  // which is final.
   await import("./direct_session.test.js");
+  await import("./sessions_tree.test.js");
 
   // Counted before the run, from the tree itself: `mocha.suite.total()` reflects
   // what Mocha decided to run, which is the very thing being checked.
   const registered = countTests(mocha.suite);
+  requireTeardownLast(mocha.suite);
   let runner: Mocha.Runner | undefined;
   const failures = await new Promise<number>((settle) => {
     runner = mocha.run(settle);
@@ -41,6 +51,56 @@ export async function run(): Promise<void> {
         " a skipped, bodyless or `.only` test cannot be a passing gate",
     );
   }
+  await assertTornDown();
+}
+
+/**
+ * The ordering contract above, enforced rather than described.
+ *
+ * The suites share one participant and the last of them stops it for good. A
+ * test appended after that one would run against a stopped participant and fail
+ * for a reason that has nothing to do with what it was checking — so the run
+ * itself asserts that the teardown happened, and happened last.
+ */
+async function assertTornDown(): Promise<void> {
+  const extension = vscode.extensions.getExtension("mariotoffia.agent-conductor");
+  const hooks = (await extension?.activate()) as ConductorTestHooks | undefined;
+  assert.ok(hooks, "the extension returned no test hooks");
+  assert.equal(hooks.participant.currentSessionId, undefined, "a session outlived the suite");
+  const said: string[] = [];
+  const result = await hooks.participant.handle(
+    { prompt: "hello" },
+    { markdown: (text: string) => said.push(text), progress: () => undefined, button: () => undefined },
+    { isCancellationRequested: false, onCancellationRequested: () => ({ dispose: () => undefined }) },
+  );
+  assert.equal(result.metadata.stopReason, "refused");
+  assert.match(said.join("\n"), /shutting down/, "the participant was never stopped");
+}
+
+/**
+ * The teardown test really is the last one registered.
+ *
+ * `assertTornDown` below proves the participant was stopped; this proves nothing
+ * ran after it was. A test appended below the terminal one would drive a stopped
+ * participant and fail for a reason that has nothing to do with what it checked,
+ * so the run says which rule was broken instead.
+ */
+function requireTeardownLast(suite: Mocha.Suite): void {
+  const titles = everyTest(suite);
+  const last = titles[titles.length - 1];
+  if (last === undefined || !last.includes("teardown")) {
+    throw new Error(
+      `the last extension-host test is "${last ?? "none"}" —` +
+        " teardown stops the shared participant, so it has to be the last one registered",
+    );
+  }
+}
+
+function everyTest(suite: Mocha.Suite): string[] {
+  return [
+    ...suite.tests.map((test) => test.title),
+    ...suite.suites.flatMap((child) => everyTest(child)),
+  ];
 }
 
 /** Every test in the tree, whatever Mocha would go on to select. */

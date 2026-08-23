@@ -12,7 +12,7 @@ make install    # checks for node>=20, npm and git, lists the agent CLIs you hav
 make check      # build, lint and unit tests — no agent CLI needed
 ```
 
-Open the folder in VS Code and press **F5** to launch the extension. In the new window, run *Agent Conductor: Connect a CLI…*, or type **@conductor** in Chat.
+Open the folder in VS Code and press **F5** to launch the extension. In the new window, run *Agent Conductor: Connect a CLI…*, or type **@conductor** in Chat. The **Sessions** view in the activity bar lists what this window is running and what it remembers, and is where a session is cancelled or picked up again.
 
 ## Security defaults
 
@@ -21,6 +21,7 @@ An agent CLI is a program that runs with your permissions. It is not a sandboxed
 - **You approve each CLI before it runs.** The approval covers the exact program and the exact arguments. Change either and you are asked again.
 - **Starting a session never downloads anything.** Only programs already on your machine are run. Installing one is a separate step, and it names an exact version.
 - **Handing work to other CLIs is off** until you turn it on.
+- **Opening a folder starts nothing.** Sessions are remembered as metadata — never a prompt, never anything the agent read — and picking one up again is something you do. Turn on `agentConductor.sessions.resumeOnStartup` and one session is opened for you, the most recent that still clears every condition. Sessions are remembered per machine, and a session another window has open is not offered to this one — so two windows on one folder cannot end up running two agents on one conversation.
 - **Git worktrees keep changes apart, not agents.** They stop two agents editing the same files. They do not limit what an agent can read or run.
 - **Claude sessions need an API key.** Signing in with a claude.ai subscription is disabled by default — the adapter is launched with `--hide-claude-auth`, and that is part of what you approve. Keys live in VS Code's secret storage; your settings hold only the name of the key, never its value.
 - **Permission prompts say what the extension is about to do** — read this file, run this command — rather than repeating the agent's own description of it.
