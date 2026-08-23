@@ -305,13 +305,26 @@ interface EffectiveSelection {
 
 ### Task 10: Specify and implement metadata-only Session persistence
 
-**Files:** Create `src/core/sessionStore.ts`, `src/test/unit/session_store.test.ts`; modify `src/core/session.ts`, `src/vscode/config.ts`.
+**Files:** Created `src/core/sessionStore.ts`, `src/vscode/sessionRecords.ts`, `src/test/unit/session_store.test.ts` and `session_records.test.ts`; modified `src/core/index.ts`, `src/vscode/composition.ts`, `src/test/unit/client_settings.test.ts`; added the Resume flow to `ARCHITECTURE.md` and rewrote **Persisted Session** in `UBIQUITOUS.md`.
 
-- [ ] Test schema migration, corrupt records, missing Runtime/workspace, restart recovery, and metadata redaction.
-- [ ] Persist IDs, Runtime, workspace, timestamps, requested/effective selection, stop state, parent ID, worktree metadata, and Agent resume token only when supported. Do not persist prompts, hidden context, credentials, or tool payloads by default.
+- [x] Test schema migration, corrupt records, missing Runtime/workspace, restart recovery, and metadata redaction.
+  - A store written under a version this build does not know is not read, and the ordinary save that follows keeps it aside rather than replacing it. Bumping the version otherwise makes every record unreadable and the user's next session silently destroys them, which is not a thing a migration can be written against afterwards.
+  - A read that *failed* is not a store that is empty. Those were one answer at first, so a momentary read error would have had the next save write one record over every record it could not see.
+- [x] Persist IDs, Runtime, workspace, timestamps, requested/effective selection, stop state, parent ID, worktree metadata, and Agent resume token only when supported. Do not persist prompts, hidden context, credentials, or tool payloads by default.
+  - There is no Agent resume token to persist. Both ways back into an ACP session — `session/load` and `session/resume` — take the session id, the `cwd`, the MCP servers and the additional directories, and nothing secret, so the id is the handle. This Client sends `session/load` alone, so what a record carries is whether the Agent advertised `loadSession`. Checked against the installed schema rather than assumed, after a review found the first wording claimed more than that.
+  - Nothing gets in that the record has no field for: it is built field by field on the way in, and stripped on the way out. Those are two separate barriers at two boundaries, because one that another layer quietly covers for is one no test can break.
+  - Everything an Agent worded — the session id most of all, since the Agent chooses it — is redacted against the values its process was started with before it becomes durable, and before records are compared, or every update would file as a new Session. Values and record counts are both bounded: an Agent picks its own session id, and a window can open a Session per Turn.
+  - The parent id and worktree fields exist and stay empty until the Orchestrator fills them (Task 13).
+  - `src/core/session.ts` needed no change: everything a record holds was already exposed. `src/vscode/config.ts` needed none either — `fileStorage` was already the durable-storage port.
 - [ ] On startup, list resumable metadata; load only on explicit user action unless `resumeOnStartup` is enabled and trust still holds.
-- [ ] Re-send sorted MCP servers and capability-supported directories on load.
-- [ ] Run `node --import tsx --test src/test/unit/session_store.test.ts`; expect pass. Commit: `feat: persist resumable session metadata`.
+  - The decision is implemented and tested, and fails closed four ways: a Runtime that is gone, a launch whose fingerprint no longer matches what that conversation ran under, a folder this window has not opened, and an Agent this Client cannot reattach to. Nothing is resumed at startup unless the setting says so, and then one Session at most.
+  - Nothing calls it. Listing saved Sessions and offering one back is the Sessions tree's, so `agentConductor.sessions.resumeOnStartup` still has no consumer and stays on the list of settings nothing acts on — with its reason corrected, since sessions *are* persisted now.
+- [x] Re-send sorted MCP servers and capability-supported directories on load.
+  - Already true and already pinned in the ACP client tests; confirmed rather than reimplemented.
+- [x] Run `node --import tsx --test src/test/unit/session_store.test.ts`; expect pass. Commit: `feat: persist resumable session metadata`.
+  - Found by two independent adversarial reviews of the finished change, and fixed: the save that clobbers a store it could not read; a window closing without waiting for the record of how a Session ended, where the function that exists to wait for exactly that had no caller; and eviction that always kept the record being written, so a clock that stepped back could push out the newest Session instead of the oldest.
+  - And by reviewing those fixes: what a bump keeps aside had one name, so a second bump would have destroyed what the first one kept — and two bumps with no migration written in between is ordinary, since nothing forces one. It is keyed by the version it holds now.
+  - Three of the tests were weaker than their names. The oversize-file case was padded with text no JSON parser would accept, so the size gate it existed for could be deleted with it still green; the "no prompt on disk" case passed whichever of the two barriers was removed; and the one for a Session with no approved launch identity could not tell the decision not to write from the schema refusing to. Every guard added here was then probed by removing it and checking the test fails.
 
 ### Task 11: Add the Sessions tree and actions
 

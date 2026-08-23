@@ -9,6 +9,7 @@ import {
   refreshRegistry,
   resolveRuntime,
   runtimeCatalog,
+  savesSettled,
   type LogLevel,
   type LogPort,
   type RegistrySnapshot,
@@ -30,6 +31,7 @@ import { OPEN_DIFF_COMMAND } from "./chatSink.js";
 import { ConductorParticipant, type RuntimeChoice } from "./participant.js";
 import { openTrustedSession } from "./spawnGate.js";
 import { PermissionRouter, type ConsentHost } from "./permissions.js";
+import { remember } from "./sessionRecords.js";
 import { TerminalService } from "./terminals.js";
 import { connectCli } from "./wizard.js";
 import { wizardHost, wizardTerminals } from "./wizardHost.js";
@@ -155,7 +157,12 @@ export function activateConductor(context: vscode.ExtensionContext): ConductorAc
       const roots = sessionRoots();
       const trust = trustFor(context, spec);
       const entry = current.runtimes[spec.id];
-      return openTrustedSession({
+      const secretEnvironment = await resolveSecretEnvironment(
+        context.secrets,
+        spec.id,
+        entry?.secretEnvironment,
+      );
+      const session = await openTrustedSession({
         spec,
         executable: executablePort(),
         // Workspace trust is the window's own answer, read at spawn time rather
@@ -164,16 +171,21 @@ export function activateConductor(context: vscode.ExtensionContext): ConductorAc
         ...(trust ? { trust } : {}),
         cwd: roots[0],
         additionalDirectories: roots.slice(1),
-        secretEnvironment: await resolveSecretEnvironment(
-          context.secrets,
-          spec.id,
-          entry?.secretEnvironment,
-        ),
+        secretEnvironment,
         ...(entry?.defaultModel ? { requestedModel: entry.defaultModel } : {}),
         ...(entry?.defaultEffort ? { requestedEffort: entry.defaultEffort } : {}),
         onUpdate,
         ports: sessionPorts(current, roots, spec.displayName, log, askConsent()),
       });
+      remember(session, storage, log, {
+        runtimeId: spec.id,
+        workspace: roots[0],
+        secrets: Object.values(secretEnvironment),
+        // The launch this Session ran under. `openTrustedSession` only returns
+        // for a Runtime whose fingerprint matched, so this is that fingerprint.
+        ...(trust ? { fingerprint: trust.fingerprint } : {}),
+      });
+      return session;
     },
   });
   // `stop`, not `dispose`: this teardown is the final one, and a turn waiting
@@ -229,7 +241,13 @@ export function activateConductor(context: vscode.ExtensionContext): ConductorAc
 
   channel.info("Agent Conductor activated.");
   return {
-    teardown: () => participant.stop(),
+    teardown: async () => {
+      await participant.stop();
+      // Session records are written with nothing waiting on them, so that a Turn
+      // never queues behind a file. This is the one moment that has to: a window
+      // closing would otherwise take the record of how the Session ended with it.
+      await savesSettled(storage);
+    },
     ...(context.extensionMode === vscode.ExtensionMode.Test
       ? {
           hooks: {

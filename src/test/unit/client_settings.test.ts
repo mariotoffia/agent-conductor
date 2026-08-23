@@ -306,7 +306,7 @@ const NOT_ACTED_ON: Record<string, string> = {
   "presets": "chosen per subagent, and nothing spawns one yet",
   "worktrees.root": "nothing creates a worktree yet",
   "gemini.writeWorkspaceSettings": "the workspace suppression channel is not wired end to end",
-  "sessions.resumeOnStartup": "sessions are not persisted, so there is nothing to resume",
+  "sessions.resumeOnStartup": "sessions are persisted, but nothing offers one back yet",
 };
 
 test("a setting nothing acts on is one this client admits to", async () => {
