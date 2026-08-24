@@ -57,6 +57,28 @@ function recordingStream() {
   };
 }
 
+/**
+ * The Subagent result the Agent reported, as an object.
+ *
+ * A Shim that cannot reach the Orchestrator says so in prose, and an MCP tool
+ * that throws is carried back as prose too — neither has a brace in it. Reading
+ * that as an empty object would turn every one of those into the same failure,
+ * `state: undefined`, with what actually went wrong nowhere on screen. So the
+ * absence of an answer is its own failure, quoting what the Agent really said.
+ */
+function subagentAnswer(said: string): Record<string, unknown> {
+  const found = /\{[\s\S]*\}/.exec(said)?.[0];
+  assert.ok(
+    found,
+    `the agent reported no subagent result — it said instead: ${said.trim() || "(nothing at all)"}`,
+  );
+  try {
+    return JSON.parse(found) as Record<string, unknown>;
+  } catch (error) {
+    assert.fail(`the subagent result is not JSON (${String(error)}): ${found}`);
+  }
+}
+
 const liveToken = {
   isCancellationRequested: false,
   onCancellationRequested: () => ({ dispose: () => undefined }),
@@ -137,7 +159,7 @@ suite("an agent delegating through the injected shim in the extension host", () 
     );
 
     assert.equal(result.metadata.stopReason, "end_turn");
-    const answer = JSON.parse(/\{[\s\S]*\}/.exec(out.text())?.[0] ?? "{}") as Record<string, unknown>;
+    const answer = subagentAnswer(out.text());
     // A refusal from our own side is a legible failure and says which condition
     // it was; anything else means the Agent could not start what we injected.
     assert.equal(answer.error, undefined, `the agent could not use the injected shim: ${out.text()}`);

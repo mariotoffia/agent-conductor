@@ -28,6 +28,7 @@ import {
 import { liveLogPort, sessionPorts } from "./clientPorts.js";
 import { formHost, modalConsentHost, openDocuments } from "./hostPorts.js";
 import { openDiff } from "./diffCommand.js";
+import { runtimeTrustStore } from "./runtimeTrust.js";
 import { DiffDocuments, DIFF_SCHEME } from "./diffDocs.js";
 import { OPEN_DIFF_COMMAND } from "./chatSink.js";
 import { ConductorParticipant, type RuntimeChoice } from "./participant.js";
@@ -147,8 +148,10 @@ export function activateConductor(context: vscode.ExtensionContext): ConductorAc
     return catalog(current, current["registry.autoResolve"] ? registry : undefined, override);
   };
 
-  const recordTrust = async (runtimeId: string, trust: RuntimeTrust): Promise<void> => {
-    await context.globalState.update(trustKey(runtimeId), trust);
+  const trust = runtimeTrustStore(context.globalState);
+
+  const recordTrust = async (runtimeId: string, record: RuntimeTrust): Promise<void> => {
+    await trust.record(runtimeId, record);
     // Approving a Runtime changes which saved Sessions may be reattached to, in
     // both directions: the ones that ran under the identity just approved, and
     // the ones that ran under the one it replaced.
@@ -170,7 +173,7 @@ export function activateConductor(context: vscode.ExtensionContext): ConductorAc
   const conditions = (): ResumeConditions => ({
     fingerprints: new Map(
       runtimes().flatMap((spec) => {
-        const fingerprint = trustFor(context, spec)?.fingerprint;
+        const fingerprint = trust.get(spec.id)?.fingerprint;
         return fingerprint === undefined ? [] : [[spec.id, fingerprint] as const];
       }),
     ),
@@ -209,7 +212,7 @@ export function activateConductor(context: vscode.ExtensionContext): ConductorAc
   const conductor = orchestration({
     settings,
     runtimes: () => runtimes(),
-    trustFor: (spec) => trustFor(context, spec),
+    trustFor: (spec) => trust.get(spec.id),
     executable: executablePort(),
     workspace: () => workspaceRoots()[0],
     openChild: (child: ChildLaunch) => startSession(child.runtimeId, () => undefined, undefined, child),
@@ -246,7 +249,7 @@ export function activateConductor(context: vscode.ExtensionContext): ConductorAc
       settings,
       roots: workspaceRoots,
       workspaceTrusted: () => vscode.workspace.isTrusted,
-      trustFor: (spec) => trustFor(context, spec),
+      trustFor: (spec) => trust.get(spec.id),
       secretsFor: (spec, references) =>
         resolveSecretEnvironment(context.secrets, spec.id, references),
       executable: executablePort(),
@@ -462,18 +465,6 @@ function asChoice(spec: RuntimeSpec): RuntimeChoice {
     ...(spec.unavailable ? { description: spec.unavailable } : {}),
   };
 }
-
-/**
- * Runtime Trust the user granted, keyed by Runtime id.
- *
- * Written by the connection wizard, which is the only thing that may: a Runtime
- * nobody took through it resolves untrusted, and no Agent is started for it.
- */
-function trustFor(context: vscode.ExtensionContext, spec: RuntimeSpec): RuntimeTrust | undefined {
-  return context.globalState.get<RuntimeTrust>(trustKey(spec.id));
-}
-
-const trustKey = (runtimeId: string): string => `runtimeTrust.${runtimeId}`;
 
 /**
  * The same folders, without the demand that there be any.
