@@ -1,3 +1,6 @@
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import {
   builtinRuntimes,
@@ -11,6 +14,7 @@ import {
   type ExecutablePort,
   type RuntimeSpec,
 } from "../core/index.js";
+import { MOCK_MODEL, startMockProvider, type MockProvider } from "./mock-provider.js";
 
 /**
  * `make smoke-live`: probe whichever agent CLIs are installed on this machine,
@@ -55,6 +59,14 @@ interface SmokeLiveOptions {
    * credential is not (ADR-0010).
    */
   secrets?: readonly string[];
+  /**
+   * What a row means, where it does not mean what every other row means, by
+   * Runtime id. `dsh OK` and `copilot OK` are otherwise the same three
+   * characters for two different claims — one probed against the provider the
+   * user configured, the other against a fixture — and a table read on its own,
+   * piped or grepped, keeps whichever line it was printed beside.
+   */
+  notes?: Readonly<Record<string, string>>;
 }
 
 /** One selection for a report line: the effective value or an honest absence. */
@@ -127,24 +139,135 @@ export async function smokeLive(
       if (outcome.outcome === "failed") failed += 1;
     }
     // Every detail passes the one scrubber on its way out, whatever path
-    // composed it — a site that seals its own way is how one gets missed.
-    outcome = { ...outcome, detail: reportLine(outcome.detail, secrets) };
+    // composed it — a site that seals its own way is how one gets missed. The
+    // note goes first, so the bound falls on the Agent's words rather than on
+    // what this Client is saying about the run.
+    const note = options.notes?.[outcome.id];
+    outcome = {
+      ...outcome,
+      detail: reportLine(note ? `${note} · ${outcome.detail}` : outcome.detail, secrets),
+    };
     outcomes.push(outcome);
     options.log?.(`${outcome.id.padEnd(8)} ${outcome.outcome.toUpperCase().padEnd(7)} ${outcome.detail}`);
   }
   return { outcomes, probed, failed };
 }
 
+/**
+ * DeepSeek Harness, pointed at a model endpoint that is always there.
+ *
+ * Its provider is one the user hosts, so probing it as configured proves only
+ * whether that machine was up — and fails whenever it is not, which is not what
+ * a run of this is asking. The endpoint is redirected through a patch overlay
+ * dsh applies after its own profile, written to a temporary file: nothing of
+ * the user's configuration is read, changed, or needed.
+ *
+ * The provider is given a variable to read a key from because dsh insists on
+ * holding one, and the mock accepts any value — there is no credential here.
+ *
+ * `llm-pi-ai` is the entry dsh's own base profile gives its provider plugin;
+ * overriding that entry's config is what adds a route, and `acp` is the entry
+ * `walkthrough/install.md` has the user insert. Both, and the `--patch` flag,
+ * are recorded in `docs/CHANGELOG.md` with the date they were checked.
+ */
+const DSH_MOCK_KEY = "AGENT_CONDUCTOR_MOCK_KEY";
+
+async function pointDshAtMock(
+  specs: RuntimeSpec[],
+): Promise<{ specs: RuntimeSpec[]; provider?: MockProvider; close: () => Promise<void> }> {
+  const dsh = specs.find((spec) => spec.id === "dsh");
+  if (!dsh) return { specs, close: () => Promise.resolve() };
+
+  const provider = await startMockProvider();
+  // Whatever fails after the server is listening takes the server with it: an
+  // open socket keeps this process alive, so a leak here is a run that hangs
+  // rather than one that fails.
+  try {
+    return await pointedAt(specs, provider);
+  } catch (error) {
+    await provider.close();
+    throw error;
+  }
+}
+
+async function pointedAt(
+  specs: RuntimeSpec[],
+  provider: MockProvider,
+): Promise<{ specs: RuntimeSpec[]; provider?: MockProvider; close: () => Promise<void> }> {
+  const directory = await mkdtemp(join(tmpdir(), "agent-conductor-mock-"));
+  // The directory goes the same way the server does if what follows fails:
+  // only the returned `close` removes it, and a throw never returns one.
+  try {
+    return await withPatchIn(specs, provider, directory);
+  } catch (error) {
+    await rm(directory, { recursive: true, force: true });
+    throw error;
+  }
+}
+
+async function withPatchIn(
+  specs: RuntimeSpec[],
+  provider: MockProvider,
+  directory: string,
+): Promise<{ specs: RuntimeSpec[]; provider?: MockProvider; close: () => Promise<void> }> {
+  const patch = join(directory, "cordis.patch.yml");
+  await writeFile(
+    patch,
+    [
+      "- id: llm-pi-ai",
+      "  config:",
+      "    providers:",
+      "      mock:",
+      "        api: openai-completions",
+      `        baseURL: ${provider.url}`,
+      `        apiKeyEnv: ${DSH_MOCK_KEY}`,
+      "        models:",
+      `          - id: ${MOCK_MODEL}`,
+      "- id: acp",
+      `  config: {provider: mock, model: ${MOCK_MODEL}}`,
+      "",
+    ].join("\n"),
+    "utf8",
+  );
+  // Inherited by the Agent this script starts, which is how a shell would
+  // supply it. Any value does: the mock reads none of it.
+  const had = process.env[DSH_MOCK_KEY];
+  process.env[DSH_MOCK_KEY] = "mock";
+  return {
+    specs: specs.map((spec) =>
+      spec.id === "dsh"
+        ? { ...spec, launch: { ...spec.launch, args: [...spec.launch.args, "--patch", patch] } }
+        : spec,
+    ),
+    provider,
+    close: async () => {
+      // Put back rather than deleted: this is a global, and a second caller in
+      // this process did not ask for its environment to be edited.
+      if (had === undefined) delete process.env[DSH_MOCK_KEY];
+      else process.env[DSH_MOCK_KEY] = had;
+      await provider.close();
+      await rm(directory, { recursive: true, force: true });
+    },
+  };
+}
+
 async function main(): Promise<void> {
   // The catalog under the same policy a default direct Session launches with.
-  const specs = builtinRuntimes({ suppressBuiltInSubagents: false });
-  const result = await smokeLive(specs, {
-    executable: executablePort(),
-    log: (line) => console.log(line),
-    // Everything the shell holds: this script cannot know which of it is a
-    // credential, and the probe handed the child all of it.
-    secrets: Object.values(process.env).filter((value): value is string => value !== undefined),
-  });
+  const catalog = builtinRuntimes({ suppressBuiltInSubagents: false });
+  const mock = await pointDshAtMock(catalog);
+  let result;
+  try {
+    result = await smokeLive(mock.specs, {
+      executable: executablePort(),
+      log: (line) => console.log(line),
+      // Everything the shell holds: this script cannot know which of it is a
+      // credential, and the probe handed the child all of it.
+      secrets: Object.values(process.env).filter((value): value is string => value !== undefined),
+      ...(mock.provider ? { notes: { dsh: "via the bundled mock provider, not dsh's own" } } : {}),
+    });
+  } finally {
+    await mock.close();
+  }
   const skipped = result.outcomes.length - result.probed;
   console.log(`probed ${result.probed} · ok ${result.probed - result.failed} · failed ${result.failed} · skipped ${skipped}`);
   if (result.probed === 0) console.log("no agent CLI was found to probe — nothing was verified");

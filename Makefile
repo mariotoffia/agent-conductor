@@ -142,6 +142,11 @@ test-integration: build ## VS Code extension host tests against the mock agent â
 #
 # A placeholder gets past a CLI that only checks a variable is set; one that
 # actually calls a provider still needs a real credential, and says so.
+#
+# DeepSeek Harness is the exception: its model provider is self-hosted, so it is
+# probed against the bundled mock provider (src/test/mock-provider.ts) through a
+# temporary patch overlay. Nothing of the user's dsh configuration is used or
+# changed, and the run needs no endpoint of theirs to be up.
 smoke-live: ## Probe installed agent CLIs live, with the wizard's own Smoke Test (manual)
 	$(NODE) --import tsx src/test/smoke-live.ts
 

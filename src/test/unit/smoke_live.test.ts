@@ -35,6 +35,21 @@ liveTest("a runtime that is not installed is skipped with the reason, not failed
   assert.match(outcome?.detail ?? "", /not found/);
 });
 
+liveTest("a row that means something else says so, and says it first", async () => {
+  // `dsh OK` and `copilot OK` are the same three characters for two different
+  // claims — one probed against the user's own provider, the other against a
+  // fixture. A table read on its own must carry the difference.
+  const lines: string[] = [];
+  const result = await smokeLive([mockRuntime()], {
+    executable,
+    notes: { mock: "via the bundled mock provider" },
+    log: (line) => lines.push(line),
+  });
+
+  assert.match(result.outcomes[0]?.detail ?? "", /^via the bundled mock provider · /);
+  assert.match(lines.join("\n"), /via the bundled mock provider/);
+});
+
 liveTest("a runtime that answers the smoke test wrongly fails the run", async () => {
   const result = await smokeLive([mockRuntime("chatty")], { executable });
   assert.equal(result.probed, 1);
