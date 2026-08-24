@@ -423,22 +423,21 @@ test("the mark on a custom runtime survives being shown", () => {
 test("DeepSeek Harness is catalogued as a preview: pinned ACP adapter, no suppression recipe", () => {
   const dsh = builtinRuntimes(policy).find((runtime) => runtime.id === "dsh");
   assert.ok(dsh, "the catalog lists DeepSeek Harness");
-  assert.equal(dsh.launch.command, "dsh-acp");
-  assert.deepEqual(dsh.launch.args, []);
-  // The vendor's own @deepseek-ai/dsh-acp ships no executable yet, so the pin
-  // is the third-party ACP server; moving to the vendor's is a catalog change.
-  assert.deepEqual(dsh.adapter, {
-    package: "@openma/deepseek-harness-acp",
-    version: "0.4.24",
-    bin: "dsh-acp",
-  });
+  // dsh's own launcher boots a profile holding DeepSeek's ACP plugin: the
+  // official route, proven to answer `initialize` and open a session.
+  assert.equal(dsh.launch.command, "dsh");
+  assert.deepEqual(dsh.launch.args, ["--profile", "acp"]);
+  assert.deepEqual(dsh.adapter, { package: "@deepseek-ai/dsh", version: "0.1.1-rc.2", bin: "dsh" });
   assert.equal(dsh.registryId, undefined, "not in the ACP Registry: the pin moves only by catalog change");
-  // The name carries the caveat because the wizard's picker and its install
-  // offer draw nothing else about an entry: a catalogued runtime nothing has
-  // connected to must say so where a person decides to install it.
-  assert.match(dsh.displayName, /preview.*connected/i, "the picker must say it is a preview nothing has connected to");
+  // The vendor calls it a developer preview with breaking changes ahead, and the
+  // picker draws nothing else about an entry, so the name says so.
+  assert.match(dsh.displayName, /preview/i, "the picker must say it is a preview");
   // No documented way to switch dsh's own subagents off exists, so it carries
   // no plan and stays ineligible for Shim injection (ADR-0008, fail closed).
   assert.equal(dsh.suppression, undefined);
-  assert.equal(dsh.loginCommand, "dsh-acp login");
+  assert.equal(dsh.loginCommand, "dsh web");
+  // dsh's ACP exposes no Config Options and no launch flag sets its model, so
+  // `/model` must say there is nothing to choose — not "reconnect with the
+  // value you want", which is what process-scoped config would make it say.
+  assert.equal(dsh.quirks.processScopedConfig, false);
 });

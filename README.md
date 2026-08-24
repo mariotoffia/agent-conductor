@@ -1,6 +1,6 @@
 # Agent Conductor
 
-Run coding CLIs — Claude Code, Codex, Gemini CLI, Copilot CLI, or any [ACP](https://agentclientprotocol.com) agent — inside VS Code.
+Run coding CLIs — Claude Code, Codex, Gemini CLI, Copilot CLI, DeepSeek Harness (preview), or any [ACP](https://agentclientprotocol.com) agent — inside VS Code.
 
 You choose the CLI, the model, and the reasoning effort for each session, and what you asked for is always shown beside what the agent reports it is actually running. Written entirely in TypeScript.
 

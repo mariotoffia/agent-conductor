@@ -99,8 +99,11 @@
   },
   "dsh": {
     "launch": {
-      "command": "dsh-acp",
-      "args": [],
+      "command": "dsh",
+      "args": [
+        "--profile",
+        "acp"
+      ],
       "env": {}
     },
     "suppression": null
