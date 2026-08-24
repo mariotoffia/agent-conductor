@@ -43,11 +43,12 @@ export interface TrustedSessionRequest {
   requestedModel?: string;
   requestedEffort?: string;
   /**
-   * Decides the Shim for the identity that actually resolved (ADR-0004).
+   * Decides the Shim for the identity that actually resolved (ADR-0014).
    *
    * A function taking the resolved Runtime, because eligibility rests on what
-   * this launch turns out to be — its trust and its Suppression Capability —
-   * and that is only known here, after both gates and before the process starts.
+   * this launch turns out to be — its trust, and whether its agent takes MCP
+   * servers at all — and that is only known here, after both gates and before
+   * the process starts.
    */
   orchestrate?: (runtime: ResolvedRuntime) => Promise<ShimInjection>;
   onUpdate: (notification: acp.SessionNotification) => void;
