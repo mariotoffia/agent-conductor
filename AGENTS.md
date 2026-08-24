@@ -2,7 +2,7 @@
 
 This is the canonical file. `.claude/CLAUDE.md` is a symlink to it. If the two ever differ, keep the user's edits and say so.
 
-Agent Conductor is a **VS Code extension, written in TypeScript**. It runs coding CLIs — Claude Code, Codex, Gemini CLI, Copilot CLI, any ACP agent — over the **Agent Client Protocol (ACP v1)**. The user picks the CLI, model and effort for each session. One agent can hand work to agents on other CLIs through a small server we inject, while each CLI's own way of doing that is switched off.
+Agent Conductor is a **VS Code extension, written in TypeScript**. It runs coding CLIs — Claude Code, Codex, Gemini CLI, Copilot CLI, any ACP agent — over the **Agent Client Protocol (ACP v1)**. The user picks the CLI, model and effort for each session. It is built to let one agent hand work to agents on other CLIs through a small server we inject, with each CLI's own way of doing that switched off — but that stays off for every CLI until suppression can be verified over ACP, which it cannot be yet (ADR-0008).
 
 This file tells you where to look. It does not repeat the rules that live elsewhere.
 
@@ -21,7 +21,7 @@ Be brief in chat, status updates, findings and handoffs. Be complete when the wo
 | working as, or starting, a persona | `PERSONAS.md` |
 | wondering why something was decided, or changing it | `docs/adr/` — to change a decision, write a new ADR that supersedes the old one (`make adr`) |
 | looking for current status | `docs/plans/0001-mvp-implementation-plan.md` |
-| looking for how-to detail: the manifest, settings, the wizard, code sketches | `docs/plans/0002-implementation-guide.md` (**temporary** — see the rule about plan files below) |
+| looking for what a release does, and what was verified for it | `docs/CHANGELOG.md` |
 | adding or changing an agent runtime | `ARCHITECTURE.md §Runtime catalog`, then "Adding a runtime" below |
 
 Docs are Markdown. The root holds exactly four: `AGENTS.md`, `UBIQUITOUS.md`, `ARCHITECTURE.md`, `PERSONAS.md`. Everything else goes in `docs/`. Do not add a root-level doc unless asked.
@@ -36,7 +36,7 @@ Written so you can grep for them. `make lint` enforces the first two.
 - **Never hardcode model or effort lists.** Ask the agent (`configOptions`), fall back to the catalog, and always read back what the agent says it is actually running (ADR-0005).
 - **Never bypass permission routing.** Automatic decisions are keyed by what *the client* is about to do — worked out from the method and its arguments — never by the `ToolKind` the agent reports. A cancelled turn answers `{"outcome":"cancelled"}`.
 - **Secrets live in VS Code `SecretStorage`.** Settings hold only the name of a secret. Values are resolved when the process starts, and are never logged or written to settings.
-- **Check claims about other CLIs and protocols before relying on them.** They go stale within weeks. The unverified ones are listed in `docs/plans/0002-implementation-guide.md`, Appendix A.
+- **Check claims about other CLIs and protocols before relying on them.** They go stale within weeks. `docs/CHANGELOG.md` is the verification record — what was checked against which primary source, dated, and what remains unverified.
 
 ## MUST: never point at a planning document
 

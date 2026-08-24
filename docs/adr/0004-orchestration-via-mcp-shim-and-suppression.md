@@ -36,4 +36,4 @@ The costs: each spawn pays a cold start; a runtime whose config applies to the w
 
 ## References
 
-ARCHITECTURE.md §Data flows · agentclientprotocol.com/rfds/proxy-chains · per-CLI evidence: docs/plans/0002 Appendix A
+ARCHITECTURE.md §Data flows · agentclientprotocol.com/rfds/proxy-chains · per-CLI verification record: docs/CHANGELOG.md

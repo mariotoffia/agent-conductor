@@ -1,7 +1,7 @@
 {
   "name": "agent-conductor",
   "displayName": "Agent Conductor",
-  "description": "Drive Claude Code, Codex, Gemini CLI, Copilot CLI — any ACP agent — inside VS Code, with per-session cli×model×effort and cross-CLI subagents.",
+  "description": "Drive Claude Code, Codex, Gemini CLI, Copilot CLI — any ACP agent — inside VS Code. Pick CLI, model and reasoning effort per session, and see what the agent is actually running.",
   "version": "0.0.1",
   "publisher": "mariotoffia",
   "license": "Apache-2.0",
@@ -173,7 +173,7 @@
       {
         "id": "agentConductor.gettingStarted",
         "title": "Set up Agent Conductor",
-        "description": "Connect your agent CLIs and run your first orchestrated session.",
+        "description": "Connect your agent CLIs and start your first session.",
         "steps": [
           {
             "id": "install",
@@ -212,8 +212,8 @@
           },
           {
             "id": "orchestrate",
-            "title": "Enable cross-CLI subagents",
-            "description": "[Review orchestration settings](command:workbench.action.openSettings?%22agentConductor.orchestration%22)",
+            "title": "Cross-CLI subagents",
+            "description": "Not yet available for any CLI — suppression cannot be verified over ACP today. The limits that will apply are yours to review.\n[Review orchestration settings](command:workbench.action.openSettings?%22agentConductor.orchestration%22)",
             "media": {
               "markdown": "walkthrough/orchestrate.md"
             }
@@ -336,7 +336,7 @@
           "type": "object",
           "scope": "window",
           "default": {},
-          "markdownDescription": "Named (runtime, model, effort) presets usable from `/spawn` and as orchestrator defaults.",
+          "markdownDescription": "Named (runtime, model, effort) presets, used by the orchestrator as subagent defaults.",
           "additionalProperties": {
             "type": "object",
             "properties": {

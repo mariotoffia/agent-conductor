@@ -1,6 +1,6 @@
 # ARCHITECTURE
 
-How Agent Conductor is put together. The reasons behind it live in `docs/adr/` (ADR-0001…0010); the words it uses are in `UBIQUITOUS.md`. To change the shape described here, supersede the relevant ADR first.
+How Agent Conductor is put together. The reasons behind it live in `docs/adr/`; the words it uses are in `UBIQUITOUS.md`. To change the shape described here, supersede the relevant ADR first.
 
 ## Premise
 
@@ -67,7 +67,7 @@ The core's own API follows ACP's shape. That is what lets it run under plain Nod
 
 ## Data flows
 
-**Prompt.** Chat input → participant → `ConductorSession`. Two gates come first and in this order: the window's trust, then the runtime's, re-derived from a fresh resolution rather than read from a record. The session owns one agent process, created with `session/new`: the workspace as `cwd`, `mcpServers` sorted by name (including the Shim only when orchestration is on, the runtime is trusted, suppression is verified, and depth allows), and the Suppression Plan in `_meta`. Then `session/prompt`, the update pump, the render map, and a stop reason.
+**Prompt.** Chat input → participant → `ConductorSession`. Two gates come first and in this order: the window's trust, then the runtime's, re-derived from a fresh resolution rather than read from a record. The session owns one agent process, created with `session/new`: the workspace as `cwd`, `mcpServers` sorted by name (including the Shim only when orchestration is on, the runtime is trusted, suppression is verified, and depth allows), and the Suppression Plan in `_meta`. Then `session/prompt`, the update pump, the render map, and a stop reason. The render map is `src/vscode/render.ts`: one Update in, a list of surface-neutral items out, with a compile-time proof that every variant of ACP's update union is covered — an Update this client's protocol version never documented becomes an item too, because one nobody drew is indistinguishable from an agent that sent nothing (ADR-0011).
 
 A session runs one turn at a time, so a second submission is refused rather than allowed to disturb the one in flight. The turn is marked as under way before anything is awaited, because the window that matters opens at the first wait: starting the agent is the slowest part of a turn, and a second submission that raced through it would open a second session — whose process nobody then owns. The turn owns where its updates are drawn, which is what stops a later turn from taking them, or an earlier turn from losing its own. Between turns there is nowhere to draw, so an agent that keeps talking after a turn ends is logged rather than dropped.
 
