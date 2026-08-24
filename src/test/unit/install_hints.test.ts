@@ -38,9 +38,16 @@ test("a CLI that is not launchable once installed says what else it needs", () =
   // lives in a profile the user makes. The installer offer alone is a dead end.
   const setup = runtime("dsh")?.setup ?? [];
 
-  assert.equal(setup.length, 2, `dsh's setup should be its two profile commands: ${setup.join(" · ")}`);
+  assert.equal(setup.length, 3, `dsh's setup is two commands and a note: ${setup.join(" · ")}`);
   assert.match(setup[0] ?? "", /^dsh plugin --profile acp add @deepseek-ai\/dsh-acp@/);
   assert.match(setup[1] ?? "", /cordis\.patch\.yml/);
+  // The plugin does not read dsh's own default model, and a patch without both
+  // gives a runtime that connects and then fails every turn — so what is shown
+  // has to carry them, and has to say they are the user's to fill in.
+  assert.match(setup[1] ?? "", /provider: PROVIDER, model: MODEL/);
+  assert.match(setup.join("\n"), /dsh web/);
+  // Pasted as a block, the line that is not a command must not become one.
+  assert.match(setup[2] ?? "", /^#/);
   // Installing it is the Adapter offer's job, which names the same package.
   assert.equal(runtime("dsh")?.install, undefined);
 });

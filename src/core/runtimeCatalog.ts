@@ -81,10 +81,15 @@ export function baseRuntimes(): BaseRuntime[] {
       adapter: { package: "@deepseek-ai/dsh", version: "0.1.1-rc.2", bin: "dsh" },
       loginCommand: "dsh web",
       // Installed, dsh still will not speak ACP: the plugin that does lives in a
-      // profile, and a session that would not open is where that shows up.
+      // profile, and a session that would not open is where that shows up. The
+      // plugin needs its own provider and model — it does not read dsh's default
+      // — and without them every Turn fails rather than the session.
       setup: [
         "dsh plugin --profile acp add @deepseek-ai/dsh-acp@0.1.1-rc.2",
-        `printf -- "- insert:\\n    - id: acp\\n      name: '@deepseek-ai/dsh-acp'\\n" > ~/.dsh/profiles/acp/cordis.patch.yml`,
+        `printf -- "- insert:\\n    - id: acp\\n      name: '@deepseek-ai/dsh-acp'\\n      config: {provider: PROVIDER, model: MODEL}\\n" > ~/.dsh/profiles/acp/cordis.patch.yml`,
+        // A comment, so pasting all three lines at once runs the two that are
+        // commands and does nothing with this one.
+        "# PROVIDER and MODEL are dsh's own names for them (dsh web → Models)",
       ],
       quirks: { processScopedConfig: false, effortReadback: false, slashCommandAllowlist: [], refusesMcpServers: true },
     },

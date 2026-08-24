@@ -134,6 +134,14 @@ test-integration: build ## VS Code extension host tests against the mock agent â
 
 # Manual and optional by rule (PERSONAS.md): CI must not require installed CLIs,
 # credentials, subscriptions, or network â€” so no check target reaches this.
+#
+# The probe inherits this shell's environment, so a variable a CLI insists on
+# can be supplied for one run without storing anything:
+#
+#     SOME_API_KEY=whatever make smoke-live
+#
+# A placeholder gets past a CLI that only checks a variable is set; one that
+# actually calls a provider still needs a real credential, and says so.
 smoke-live: ## Probe installed agent CLIs live, with the wizard's own Smoke Test (manual)
 	$(NODE) --import tsx src/test/smoke-live.ts
 
