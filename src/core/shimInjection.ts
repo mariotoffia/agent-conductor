@@ -39,10 +39,23 @@ export const SHIM_SECRET_VARIABLE = "AGENT_CONDUCTOR_SESSION_SECRET";
 /** How long a Session Capability lives when nothing says otherwise. */
 export const DEFAULT_CAPABILITY_LIFETIME_MS = 12 * 60 * 60 * 1_000;
 
-/** Arguments the Shim is started with, before the socket it is told to use. */
+/** How the Shim is started, before the socket it is told to use. */
 export interface ShimLaunch {
   /** Absolute path of the bundled Shim, and anything before it. */
   args: string[];
+  /**
+   * What the interpreter itself needs, beside the Session Capability.
+   *
+   * The Shim is started by the *Agent*, from this entry, with an environment the
+   * Agent composes — a small default set is what MCP clients hand a stdio server
+   * — so nothing this side's own environment holds reaches it. Anything the
+   * command depends on has to travel here or not at all.
+   *
+   * It can never carry the capability: an entry naming that variable is dropped
+   * rather than ordered around, because a list with two entries of one name is
+   * resolved by whoever reads it.
+   */
+  env?: Record<string, string>;
 }
 
 /**
@@ -154,7 +167,17 @@ export function injectShim(request: ShimInjectionRequest): ShimInjection {
         args: [...request.launch.args, "--socket", request.issuer.address],
         // Never argv: `ps` and `/proc/<pid>/cmdline` are readable by any local
         // process, and a secret anyone can read authenticates anyone.
-        env: [{ name: SHIM_SECRET_VARIABLE, value: capability.secret }],
+        //
+        // The capability variable appears exactly once, whatever the launch
+        // environment holds. Which of two entries sharing a name reaches the
+        // process is the *Agent's* decision — ACP describes a list, not a map —
+        // so putting ours last would be a rule enforced in somebody else's code.
+        env: [
+          ...Object.entries(request.launch.env ?? {})
+            .filter(([name]) => name !== SHIM_SECRET_VARIABLE)
+            .map(([name, value]) => ({ name, value })),
+          { name: SHIM_SECRET_VARIABLE, value: capability.secret },
+        ],
       },
     ],
     revoke: () => capability.revoke(),

@@ -136,6 +136,40 @@ test("an eligible Session gets one stdio Shim whose secret travels in its enviro
   assert.equal(granted.length, 1);
 });
 
+test("what the interpreter needs travels in the entry, and cannot displace the capability", async (t) => {
+  // The Shim is started by the *Agent*, from this entry, with an environment the
+  // Agent composes — not ours. So anything the command depends on has to be in
+  // the entry: a VS Code extension host's own interpreter is an Electron binary
+  // and behaves as Node only when told to, and nothing it inherits says so.
+  const { server } = await issuer(t);
+
+  const injection = injectShim(
+    eligible(server, {
+      launch: {
+        args: ["/ext/dist/mcp-shim.cjs"],
+        env: { ELECTRON_RUN_AS_NODE: "1", AGENT_CONDUCTOR_SESSION_SECRET: "forged" },
+      },
+    }),
+  );
+  t.after(() => injection.revoke());
+
+  const environment = stdio(injection.servers[0] as acp.McpServer).env as Array<{
+    name: string;
+    value: string;
+  }>;
+  assert.deepEqual(
+    environment.find((entry) => entry.name === "ELECTRON_RUN_AS_NODE"),
+    { name: "ELECTRON_RUN_AS_NODE", value: "1" },
+  );
+  // Exactly one, and not the one the caller asked for. Which of two entries
+  // sharing a name reaches the process is the *Agent's* decision — ACP describes
+  // a list, not a map — so an ordering rule here would be a rule enforced in
+  // somebody else's code. There is nothing to choose between instead.
+  const secrets = environment.filter((entry) => entry.name === "AGENT_CONDUCTOR_SESSION_SECRET");
+  assert.equal(secrets.length, 1, "the capability variable appears more than once");
+  assert.notEqual(secrets[0]?.value, "forged");
+});
+
 test("the grant is what the issuer decided, and nothing a caller could widen", async (t) => {
   const { server, granted } = await issuer(t);
 

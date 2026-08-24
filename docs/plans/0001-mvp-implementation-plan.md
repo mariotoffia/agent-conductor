@@ -254,7 +254,7 @@ interface EffectiveSelection {
 - [x] Register `agentConductor.openDiff` and a virtual document provider; keep old text bounded and dispose it with the Session.
 - [x] Wire cancellation tokens to Session cancel and return the ACP cancelled outcome.
 - [x] Run the extension-host test for one mock Session end to end; expect streamed content, permission behavior, Read-back, diff command, and clean teardown. Commit: `feat: run direct ACP sessions in chat`.
-  - `make test-integration` runs VS Code with this extension loaded and drives one Session against the bundled mock Agent. Task 14 still owns the rest of its own list: the wider coverage (wizard save, resume, sessions tree, Shim child), the `engines.node` range and `doctor` enforcing it, and printing only counts and failures instead of the full log.
+  - `make test-integration` runs VS Code with this extension loaded and drives one Session against the bundled mock Agent. The wider coverage, the Node range and what the run prints came later, with the gate itself.
 
 ### Task 9: Implement the Connect-a-CLI wizard
 
@@ -413,14 +413,28 @@ interface EffectiveSelection {
 
 ### Task 14: Replace the false integration gate
 
-**Files:** Create `src/test/integration/**`, test runner configuration; modify `package.json`, `Makefile`.
+**Files:** Created `scripts/{check-node,report-integration}.mjs`, `src/test/integration/suite/{wizard_save,cancellation,shim_delegation}.test.ts`, `src/test/{mock-agent-cancellation,mock-agent-delegation}.ts`, `src/test/unit/{node_engine_gate,integration_gate_summary}.test.ts`, `src/vscode/diffCommand.ts`; modified `package.json`, `Makefile`, `src/core/shimInjection.ts`, `src/vscode/composition.ts`, `src/test/mock-agent.ts`, the integration suite index and the Shim injection tests; updated `AGENTS.md`, `ARCHITECTURE.md` and `README.md`.
 
-- [ ] Add `engines.node: "^20.19.0 || ^22.13.0 || >=24"` to `package.json` and make `doctor` enforce the same ranges before dependency installation.
-- [ ] Add `@vscode/test-electron` and run the extension in an isolated test workspace against the bundled mock Agent.
-- [ ] Cover activation, trust refusal, wizard save, direct prompt rendering, permissions, Config Option round-trip, cancellation, resume, sessions tree, Shim child result, and teardown.
-- [ ] Make missing VS Code binaries, harness setup failures, or zero discovered tests fail nonzero.
-- [ ] Keep full output in `reports/integration.log` and print only count, duration, and failure summary.
-- [ ] Run `make check-all`; expect build, lint, unit, and real extension-host integration tests to pass. Commit: `test: enforce extension-host release gate`.
+- [x] Add `engines.node: "^20.19.0 || ^22.13.0 || >=24"` to `package.json` and make `doctor` enforce the same ranges before dependency installation.
+  - The range is declared once and read from there. `npm` treats `engines` as advice and installs anyway, so the declaration alone gated nothing; `install` depends on `doctor`, which is what makes it a refusal. A second copy in the Makefile would only ever drift in the direction of the gate being wider than the declaration.
+  - A clause the check cannot read is an error about the range, never a verdict about the Node, and every clause is read rather than stopping at the first that matches — a short-circuit would leave an unreadable clause unseen for as long as some earlier one kept saying yes, which is a range widened by something nothing ever looked at.
+- [x] Add `@vscode/test-electron` and run the extension in an isolated test workspace against the bundled mock Agent.
+  - Workspace and profile are both made and destroyed with the run. Without a profile of its own the extension's global storage outlives every invocation, and a suite would read Sessions saved by the run before it, in folders that no longer exist.
+- [x] Cover activation, trust refusal, wizard save, direct prompt rendering, permissions, Config Option round-trip, cancellation, resume, sessions tree, Shim child result, and teardown.
+  - Delegation is the one that repaid its cost, and it found the defect the gate exists for. An extension host's `process.execPath` is an Electron binary, and the Shim is started by the *Agent* — with a small environment of its own, not ours — so what makes that interpreter behave as Node has to travel in the `mcpServers` entry. Every unit test passed either way, because they all run under plain Node. Taking the variable back out fails the run with the Shim's socket closing on it.
+  - The capability variable now appears exactly once whatever else that entry carries: which of two entries sharing a name reaches the process is the Agent's decision, so an ordering rule here would be one enforced in somebody else's code.
+  - Standing still and delegating are asked for by the prompt rather than by a `--mode=`. A host has one participant and it remembers the Runtime it was last given, so a Runtime of their own would have to be switched to and switched back for nothing.
+  - What the wizard's suite adds is the half every other test fakes: settings written at a chosen scope and read back through `inspect`, and a credential that goes to `SecretStorage` while settings keep only its name — asserted by looking for the value in both scopes and not finding it.
+  - Lineage is deliberately not asserted in the extension host. It has a suite of its own, and the Mock Agent numbers its Sessions from one per process, so parent and child arrive under one id and the row this would read is the one that collision folds away. A test that can only fail for its fixture's reason is worse than none when finding that out costs a VS Code.
+- [x] Make missing VS Code binaries, harness setup failures, or zero discovered tests fail nonzero.
+  - Two refusals that do not depend on each other: the suite counts what it registered against what ran, and the reporter refuses a run that exits zero having printed no count — or a count of zero, which is the same thing said differently. Neither being wrong on its own is enough to make an empty run green.
+- [x] Keep full output in `reports/integration.log` and print only count, duration, and failure summary.
+  - Not piped: a `tee` would put the window's own diagnostics back on the terminal this is clearing. `gate-selftest` re-proves the refusal, as it does for every other checker — a checker added without its probe would be the very defect the self-test exists to catch.
+  - The escape the reporter strips is written out rather than typed. An invisible `ESC` is one a patch can drop with nothing looking different, and it did: a fixture that lost its colour made a test pass for the wrong refusal, which is how the zero-count hole stayed hidden until the fixture was made to say what it meant.
+  - Two rounds of adversarial review found, and this fixes: a lint annotation that had stopped being needed, on the one file the gate depends on and in the one directory `make lint` never looked at — `src` and `scripts` are both checked now, and `npm run lint` says the same thing the Makefile does; a window that shared its form surface with the wizard in two places out of three, leaving an Agent's own elicitation reaching a dialog nothing in a headless host can click; a picker that took the first Runtime whose name merely *contained* the id it wanted, guarded by an assertion that read back the very name it had matched; a row looked up on two of the three parts a record is keyed by; and a range that could be replaced from the environment, which is a build-wide off switch with nothing in the Makefile to show for it.
+  - The suites no longer depend on which write lands last. Every Mock Agent numbers its Sessions from one per process, so a parent, its child and a later Session on the same Runtime in one folder all arrive under a single record key — the delegation suite therefore brings a Runtime of its own, and moves the participant on and off it through the `/runtime` a user would pick. That the credential test proves the *value* survived rather than that something did is the same kind of repair: the Agent it connects now refuses to start on anything but the exact key, so truncating what SecretStorage gives back fails the run.
+  - The Mock Agent's process-level scenarios are their own module. The file had reached the length rule twice in this task, and a file one line under a hard cap is a trap for whoever adds the next scenario.
+- [x] Run `make check-all`; expect build, lint, unit, and real extension-host integration tests to pass. Commit: `test: enforce extension-host release gate`.
 
 ### Task 15: Complete or remove the rich build contract
 

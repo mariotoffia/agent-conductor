@@ -8,9 +8,12 @@ You choose the CLI, the model, and the reasoning effort for each session. The ag
 
 ```bash
 git clone https://github.com/mariotoffia/agent-conductor && cd agent-conductor
-make install    # checks for node>=20, npm and git, lists the agent CLIs you have, installs dependencies
+make install    # checks node, npm and git, lists the agent CLIs you have, installs dependencies
 make check      # build, lint and unit tests — no agent CLI needed
 ```
+
+Node must be one of the versions in `engines.node` — 20.19+, 22.13+ or 24 and later. `make install`
+refuses an older one rather than building a dependency tree that cannot run.
 
 Open the folder in VS Code and press **F5** to launch the extension. In the new window, run *Agent Conductor: Connect a CLI…*, or type **@conductor** in Chat. The **Sessions** view in the activity bar lists what this window is running and what it remembers, and is where a session is cancelled or picked up again.
 

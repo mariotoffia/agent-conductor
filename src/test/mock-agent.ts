@@ -2,8 +2,10 @@
 
 import { Readable, Writable } from "node:stream";
 import { resolve } from "node:path";
-import { spawn } from "node:child_process";
 import * as acp from "@agentclientprotocol/sdk";
+import { releaseCancelled, standStill, untilCancelled, WAIT_TO_BE_CANCELLED } from "./mock-agent-cancellation.js";
+import { DELEGATE_TO_SUBAGENT, delegate } from "./mock-agent-delegation.js";
+import { misbehaveAsProcess } from "./mock-agent-process.js";
 import { spokenReply } from "./mock-agent-replies.js";
 import {
   badConfigOptions,
@@ -37,7 +39,6 @@ function speak(client: acp.AgentContext, sessionId: string, text: string): Promi
 const promptCounts = new Map<string, number>();
 let nextSession = 1;
 const sessions = new Map<string, acp.NewSessionRequest>();
-const pendingCancellations = new Map<string, () => void>();
 const mode = process.argv.find((argument) => argument.startsWith("--mode="))?.slice(7) ?? "normal";
 
 const app = acp
@@ -71,7 +72,14 @@ const app = acp
     if (mode === "silent-session-new") return new Promise<never>(() => undefined);
     // `needs-key` will not open a session without a credential — the case the
     // wizard's authentication handoff exists for.
-    if (mode === "needs-key" && !process.env.MOCK_API_KEY) throw new Error("authentication required: set MOCK_API_KEY");
+    // With an expected credential set, presence is not enough: a client that
+    // round-tripped the *reference* rather than the value, or a truncated one,
+    // is refused rather than served. Without it, presence is all there is.
+    const want = process.env.AGENT_CONDUCTOR_TEST_EXPECT_KEY;
+    const have = process.env.MOCK_API_KEY ?? "";
+    if (mode === "needs-key" && (!have || (want !== undefined && have !== want))) {
+      throw new Error("authentication required: set MOCK_API_KEY");
+    }
     // `verbose-refusal` refuses at length, and its refusal ends by contradicting
     // what the client is about to promise about credentials.
     if (mode === "verbose-refusal") {
@@ -160,12 +168,9 @@ const app = acp
     }
 
     if (mode === "permission-after-cancel") {
-      const cancelled = new Promise<void>((resolveCancellation) => {
-        pendingCancellations.set(sessionId, resolveCancellation);
-      });
+      const cancelled = untilCancelled(sessionId);
       await speak(context.client, sessionId, "Will ask for permission after cancellation");
       await cancelled;
-      pendingCancellations.delete(sessionId);
       const late = await context.client.request(acp.methods.client.session.requestPermission, {
         sessionId,
         toolCall: { toolCallId: "mock-tool", title: "Edit mock file", kind: "edit", status: "pending" },
@@ -282,21 +287,24 @@ const app = acp
       throw new Error("mock agent refuses this turn");
     }
 
-    if (mode === "cancel") {
-      const cancelled = new Promise<void>((resolveCancellation) => {
-        pendingCancellations.set(sessionId, resolveCancellation);
-      });
-      await speak(context.client, sessionId, "Waiting for cancellation");
-      await cancelled;
-      pendingCancellations.delete(sessionId);
-      return { stopReason: "cancelled" };
-    }
+    if (mode === "cancel") return standStill(sessionId, (text) => speak(context.client, sessionId, text));
 
     // The Smoke Test asks for one word so its answer is checkable without a
     // model; a cooperative agent answers exactly that.
     const asked = context.params.prompt
       .map((block) => (block.type === "text" ? block.text : ""))
       .join(" ");
+    // Asked for by the prompt rather than by a `--mode=`, so one Turn can be
+    // driven to a standstill without a Runtime of its own.
+    if (asked.includes(DELEGATE_TO_SUBAGENT)) {
+      await speak(context.client, sessionId, await delegate(sessions.get(sessionId), asked));
+      return { stopReason: "end_turn" };
+    }
+
+    if (asked.includes(WAIT_TO_BE_CANCELLED)) {
+      return standStill(sessionId, (text) => speak(context.client, sessionId, text));
+    }
+
     if (asked.includes("Reply with exactly: OK")) {
       await speak(context.client, sessionId, "OK");
       return { stopReason: "end_turn" };
@@ -426,68 +434,14 @@ const app = acp
     };
   })
   .onNotification(acp.methods.agent.session.cancel, (context) => {
-    pendingCancellations.get(context.params.sessionId)?.();
+    releaseCancelled(context.params.sessionId);
   });
 
 const stream = acp.ndJsonStream(
   Writable.toWeb(process.stdout),
   Readable.toWeb(process.stdin),
 );
-// `spawns-child` behaves like every real agent CLI: it starts helper processes
-// of its own — MCP servers, tool runners — that outlive it unless the client
-// stops the whole process group.
-if (mode === "spawns-child") {
-  const log = process.env.MOCK_AGENT_WORKER_LOG;
-  if (log) {
-    const worker = spawn(
-      process.execPath,
-      [
-        "-e",
-        "setInterval(() => require('node:fs').appendFileSync(process.argv[1], 'x'), 25)",
-        log,
-      ],
-      { stdio: "ignore" },
-    );
-    worker.unref();
-  }
-}
-
-if (mode === "stderr") {
-  process.stderr.write("mock-agent stderr\n");
-}
-// `leak-secret` behaves like a CLI that dumps its environment when it fails:
-// the resolved credential it was started with goes straight to its diagnostics.
-if (mode === "leak-secret") {
-  process.stderr.write(`fatal: request failed with MOCK_SECRET=${process.env.MOCK_SECRET}\n`);
-  process.exit(9);
-}
-/** `leak-secret-split` straddles the credential across two reads, as a long
- *  stack trace does crossing the pipe's buffer: a client redacting a chunk at a
- *  time finds nothing to remove, and reassembles the value itself. */
-function leakSecretSplit(): void {
-  const secret = process.env.MOCK_SECRET ?? "";
-  const at = Math.floor(secret.length / 2);
-  process.stderr.write(`fatal: request failed with MOCK_SECRET=${secret.slice(0, at)}`);
-  setTimeout(() => {
-    process.stderr.write(`${secret.slice(at)}\ngiving up\n`);
-    setTimeout(() => process.exit(9), 20);
-  }, 20);
-}
-if (process.argv.includes("--ignore-sigterm")) {
-  // Survives SIGTERM so clients have to escalate to end it.
-  process.on("SIGTERM", () => undefined);
-}
-if (process.argv.includes("--graceful-sigterm")) {
-  // Shuts down cooperatively, so the exit carries a code and no signal at all.
-  process.on("SIGTERM", () => process.exit(0));
-}
-if (mode === "malformed") {
-  process.stdout.end("{malformed\n", () => process.exit(2));
-} else if (mode === "exit") {
-  setImmediate(() => process.exit(23));
-} else if (mode === "leak-secret-split") {
-  // Never connects: the diagnostics and the exit are the whole scenario.
-  leakSecretSplit();
-} else {
-  app.connect(stream);
-}
+// How this Agent behaves as a *process*, which for several scenarios is instead
+// of speaking the protocol at all — so it decides whether the stream is ever
+// connected.
+misbehaveAsProcess(mode, () => app.connect(stream));

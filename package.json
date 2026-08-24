@@ -11,7 +11,8 @@
   },
   "type": "module",
   "engines": {
-    "vscode": "^1.104.0"
+    "vscode": "^1.104.0",
+    "node": "^20.19.0 || ^22.13.0 || >=24"
   },
   "categories": [
     "AI",
@@ -523,7 +524,7 @@
   "scripts": {
     "build": "node esbuild.mjs",
     "watch": "node esbuild.mjs --watch",
-    "lint": "eslint src --max-warnings 0",
+    "lint": "eslint src scripts --max-warnings 0",
     "typecheck": "tsc --noEmit",
     "test": "node scripts/run-unit-tests.mjs",
     "test:integration": "node --import tsx src/test/integration/runTests.ts"

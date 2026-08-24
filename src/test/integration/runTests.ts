@@ -79,6 +79,11 @@ async function runInside(workspace: string, profile: string): Promise<void> {
       // reads — an environment variable would be forgeable from inside the host.
       AGENT_CONDUCTOR_TEST_NODE: process.execPath,
       AGENT_CONDUCTOR_TEST_AGENT: resolve(root, "dist", "mock-agent.cjs"),
+      // The credential the wizard suite types, and the one the mock Agent will
+      // insist on being started with. It travels here rather than in the
+      // Runtime's arguments because those are written into settings, and the
+      // whole point of that suite is that a credential never lands there.
+      AGENT_CONDUCTOR_TEST_EXPECT_KEY: "sk-not-a-real-key-0123456789",
     },
   });
 }

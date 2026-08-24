@@ -143,4 +143,41 @@ suite("a direct session in the extension host", () => {
     assert.equal(tab.input.modified.scheme, "agent-conductor-diff");
   });
 
+  test("a config option picked in the window is set on the agent and read back", async () => {
+    // The whole round trip, in the host: the picker the window opens is filled
+    // from what the Agent reported, the choice goes out as `session/config/set`,
+    // and what is drawn is the Agent's answer to it rather than the value that
+    // was asked for (ADR-0005).
+    const seen: string[] = [];
+    hooks.useForm({
+      input: () => Promise.resolve(undefined),
+      pick: (items, options) => {
+        seen.push(options.title);
+        // By the value the Agent named it, never by the label: labels are the
+        // Agent's and are clamped to fit, so two can become one string and the
+        // model picked would not be the model set.
+        return Promise.resolve(items.find((item) => item.description === "mock-model"));
+      },
+      pickMany: () => Promise.resolve([]),
+    });
+    const out = recordingStream();
+
+    const result = await hooks.participant.handle(
+      { prompt: "", command: "model" },
+      out.stream,
+      liveToken,
+    );
+    hooks.useForm(undefined);
+
+    // The window's own picker was the one asked, which is what the participant
+    // sharing a form surface with the wizard buys.
+    assert.deepEqual(seen, ["Model"]);
+    assert.equal(result.metadata.stopReason, "end_turn");
+    // Both halves of a Read-back, and the effective one is the Agent's: the turn
+    // before this reported `mock-model-fast`, so a line still saying so would be
+    // one drawn without the set having taken.
+    assert.match(out.text(), /requested `mock-model`/);
+    assert.match(out.text(), /effective `mock-model`/);
+    assert.doesNotMatch(out.text(), /effective `mock-model-fast`/);
+  });
 });

@@ -47,7 +47,7 @@ claude-agent-acp  codex-acp    gemini --acp   copilot --acp   … any ACP agent
 Two facts about processes explain the rest of this document:
 
 - **The extension starts each agent.**
-- **The agent starts our Shim.** The Shim's tool calls come back to the extension, which is the only place that can open new ACP sessions and route a child's permission prompts into the same UI.
+- **The agent starts our Shim.** The Shim's tool calls come back to the extension, which is the only place that can open new ACP sessions and route a child's permission prompts into the same UI. It also runs in the agent's environment rather than ours — an MCP client hands a stdio server a small default set of its own — so whatever the Shim's interpreter needs travels in the `mcpServers` entry beside the Session Capability, never by inheritance. In an extension host that interpreter is an Electron binary, which behaves as Node only when told to.
 
 ## Protocol surfaces
 

@@ -20,12 +20,25 @@ export async function run(): Promise<void> {
   // Installing the interface by hand is what lets the tests register themselves
   // when they are imported, which must therefore happen after this line.
   mocha.suite.emit("pre-require", globalThis, "", mocha);
-  // Order matters. These suites share one participant — the host has exactly one
-  // — and it remembers the Runtime it was last given, so the direct-session
-  // suite has to run first: its opening test is that a Runtime nobody approved
-  // is refused. The suite that runs last is the one that stops the participant,
-  // which is final.
+  // Order matters, and three things decide it. These suites share one
+  // participant — the host has exactly one — and it remembers the Runtime it was
+  // last given. Runtime Trust is recorded per Runtime, so a suite that needs one
+  // unapproved has to run before whatever approves it. And `mcpServers` travels
+  // inside `session/new`, so a setting that changes what is injected only
+  // reaches a Session opened after it.
+  //
+  // The wizard goes first: nothing has approved anything yet, so a connection it
+  // saves cannot be something an earlier suite did. Then the direct session,
+  // whose opening test is that an unapproved Runtime is refused, and the
+  // cancellation suite on the Session it leaves open. Then delegation, because
+  // switching orchestration on gives the Runtime a Suppression Plan — part of
+  // the launch identity, so trust granted either side of it is trust in a
+  // different Runtime (ADR-0007) — and each of these grants its own. Last is the
+  // suite that stops the participant, which is final.
+  await import("./wizard_save.test.js");
   await import("./direct_session.test.js");
+  await import("./cancellation.test.js");
+  await import("./shim_delegation.test.js");
   await import("./sessions_tree.test.js");
 
   // Counted before the run, from the tree itself: `mocha.suite.total()` reflects

@@ -28,12 +28,15 @@ help: ## Show this help
 install: doctor ## Verify prerequisites, then install dependencies (ci when lockfile exists)
 	@if [ -f package-lock.json ]; then $(NPM) ci; else $(NPM) install; fi
 
-doctor: ## Check required tools (node>=20, npm, git) and report optional agent CLIs
+# The Node range lives in package.json's `engines.node` and is enforced here,
+# before `install` runs: npm treats `engines` as advice and installs anyway, so
+# the declaration alone gates nothing. `scripts/check-node.mjs` reads that one
+# declaration, so there is no second copy of the range to drift.
+doctor: ## Check required tools (node in engines.node, npm, git); report optional agent CLIs
 	@ok=1; \
 	for t in node npm git; do command -v $$t >/dev/null 2>&1 || { echo "MISSING: $$t"; ok=0; }; done; \
 	if command -v node >/dev/null 2>&1; then \
-	  node -e 'process.exit(Number(process.versions.node.split(".")[0])>=20?0:1)' \
-	    || { echo "node >= 20 required (have $$(node -v))"; ok=0; }; \
+	  node scripts/check-node.mjs || ok=0; \
 	fi; \
 	for c in claude codex gemini copilot; do \
 	  command -v $$c >/dev/null 2>&1 && echo "agent cli: $$c $$($$c --version 2>/dev/null | head -1)" \
@@ -53,7 +56,7 @@ typecheck: ## tsc --noEmit → reports/tsc.log
 
 lint: typecheck gate-selftest ## All static checks → reports/<tool>.log (eslint, core-import seam)
 	@mkdir -p $(REPORTS)
-	npx eslint src --max-warnings 0 2>&1 | tee $(REPORTS)/eslint.log
+	npx eslint src scripts --max-warnings 0 2>&1 | tee $(REPORTS)/eslint.log
 	@$(MAKE) --no-print-directory core-imports
 	@$(MAKE) --no-print-directory core-imports CORE_DIR=src/shim CORE_LOG=$(REPORTS)/shim-imports.log
 	@$(MAKE) --no-print-directory core-imports CORE_DIR=src/shim CORE_LOG=$(REPORTS)/shim-core.log CORE_PAT='\.\..*core'
@@ -97,6 +100,14 @@ gate-selftest: ## Prove the gates still fail when they should
 	@tmp=$$(mktemp -d); $(NODE) scripts/run-unit-tests.mjs $$tmp >/dev/null 2>&1 \
 	  && { rm -rf $$tmp; echo "FAIL: the unit suite reports success having run nothing"; exit 1; } \
 	  || rm -rf $$tmp
+	@tmp=$$(mktemp -d); rc=0; \
+	  echo "Exit code:   0" > $$tmp/silent; \
+	  printf '  0 passing (1ms)\n' > $$tmp/empty; \
+	  for probe in silent empty; do \
+	    $(NODE) scripts/report-integration.mjs $$tmp/$$probe 0 >/dev/null 2>&1 \
+	      && { echo "FAIL: the extension-host gate passes a run that proved nothing ($$probe)"; rc=1; }; \
+	  done; \
+	  rm -rf $$tmp; test $$rc -eq 0
 	@echo "gate self-test: OK"
 
 # Must fail. Invoked only by gate-selftest, which asserts that it does.
@@ -107,9 +118,15 @@ test: ## Unit tests incl. mock-ACP-agent protocol tests → reports/test.log
 	@mkdir -p $(REPORTS)
 	$(NPM) test 2>&1 | tee $(REPORTS)/test.log
 
+# The whole transcript goes to the log and the count comes back to the terminal.
+# Not piped: a `tee` would put a VS Code window's own diagnostics back on the
+# terminal this is keeping clear. The status is handed to the reporter rather
+# than acted on here, because a run that exits zero having printed no count is
+# also a failure, and only the reporter can see that.
 test-integration: build ## VS Code extension host tests against the mock agent → reports/integration.log
 	@mkdir -p $(REPORTS)
-	$(NPM) run test:integration 2>&1 | tee $(REPORTS)/integration.log
+	@set +e; $(NPM) run test:integration > $(REPORTS)/integration.log 2>&1; status=$$?; \
+	  set -e; $(NODE) scripts/report-integration.mjs $(REPORTS)/integration.log $$status
 
 check: build lint test ## Build + lint + unit tests
 check-all: build lint test test-integration ## check + extension-host integration (release gate)

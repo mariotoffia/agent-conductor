@@ -1,5 +1,4 @@
 import { randomUUID } from "node:crypto";
-import { basename } from "node:path";
 import type * as acp from "@agentclientprotocol/sdk";
 import * as vscode from "vscode";
 import {
@@ -17,6 +16,7 @@ import {
   type ResumeConditions,
   type RuntimeSpec,
   type RuntimeTrust,
+  type SuppressionEvidence,
 } from "../core/index.js";
 import {
   fileStorage,
@@ -27,12 +27,14 @@ import {
 } from "./config.js";
 import { liveLogPort, sessionPorts } from "./clientPorts.js";
 import { formHost, modalConsentHost, openDocuments } from "./hostPorts.js";
+import { openDiff } from "./diffCommand.js";
 import { DiffDocuments, DIFF_SCHEME } from "./diffDocs.js";
 import { OPEN_DIFF_COMMAND } from "./chatSink.js";
 import { ConductorParticipant, type RuntimeChoice } from "./participant.js";
 import type { SavedSession } from "./participantPorts.js";
 import { defaultWorktreeRoot, orchestration } from "./orchestration.js";
 import { fileRoots } from "./spawnGate.js";
+import type { FormHost } from "./elicitation.js";
 import type { ConsentHost } from "./permissions.js";
 import { launchSession } from "./sessionLaunch.js";
 import { sessionActions, sessionCommands } from "./sessionActions.js";
@@ -71,8 +73,13 @@ import { wizardHost, wizardTerminals } from "./wizardHost.js";
  */
 export interface ConductorTestHooks {
   /** Records Runtime Trust for the identity this Runtime resolves to right now
-   *  — the connection wizard's last step, without its questions. */
-  grantTrust(runtimeId: string): Promise<string>;
+   *  — the connection wizard's last step, without its questions.
+   *
+   *  `suppression` is what a Probe Session observed, recorded exactly as the
+   *  wizard records it. Never a verdict: whether a plan is verified is worked
+   *  out from this evidence every time the Runtime is resolved (ADR-0008), so a
+   *  test can supply what was seen but cannot assert what it meant. */
+  grantTrust(runtimeId: string, suppression?: SuppressionEvidence): Promise<string>;
   /** The live participant, so a turn can be driven inside the host. */
   participant: ConductorParticipant;
   /** Diffs this window has retained, for checking the diff command. */
@@ -82,6 +89,13 @@ export interface ConductorTestHooks {
   /** Answers consent dialogs, which a test cannot click. `undefined` restores
    *  the real modal. */
   useConsent(host: ConsentHost | undefined): void;
+  /** Answers the connection wizard's quick picks and input boxes, which a test
+   *  cannot click either. `undefined` restores the real window. */
+  useForm(host: FormHost | undefined): void;
+  /** Where this window's orchestration socket is listening, or nothing because
+   *  there is none — which is the ordinary answer, and the one that says a
+   *  window with orchestration off never made one (ADR-0008). */
+  orchestrationAddress(): string | undefined;
 }
 
 export interface ConductorActivation {
@@ -141,9 +155,11 @@ export function activateConductor(context: vscode.ExtensionContext): ConductorAc
     sessions.refresh();
   };
 
-  // Replaced only through the test hooks below; the real modal otherwise.
+  // Replaced only through the test hooks below; the real window otherwise.
   let consent: ConsentHost | undefined;
   const askConsent = (): ConsentHost => consent ?? modalConsentHost();
+  let form: FormHost | undefined;
+  const askForm = (): FormHost => form ?? formHost();
 
   const diffs = new DiffDocuments();
   context.subscriptions.push(
@@ -203,7 +219,14 @@ export function activateConductor(context: vscode.ExtensionContext): ConductorAc
     // absolute, because ACP requires it and because a bare name would be
     // resolved from wherever the Agent happens to be running.
     command: process.execPath,
-    shim: { args: [vscode.Uri.joinPath(context.extensionUri, "dist", "mcp-shim.cjs").fsPath] },
+    shim: {
+      args: [vscode.Uri.joinPath(context.extensionUri, "dist", "mcp-shim.cjs").fsPath],
+      // An extension host's `process.execPath` is an Electron binary, which runs
+      // as Node only when told to. The Agent starts the Shim, and hands it a
+      // small environment of its own rather than this one — so what makes the
+      // interpreter behave has to travel in the entry. Harmless anywhere else.
+      env: { ELECTRON_RUN_AS_NODE: "1" },
+    },
     worktreeRoot: defaultWorktreeRoot(context.globalStorageUri.fsPath),
   });
   context.subscriptions.push({ dispose: () => void conductor.dispose() });
@@ -235,7 +258,10 @@ export function activateConductor(context: vscode.ExtensionContext): ConductorAc
           log,
           consent: askConsent(),
           documents: openDocuments(),
-          forms: formHost(),
+          // The window's one form surface again: an Agent's own elicitation is a
+          // question like any other, and what answers it must not depend on
+          // which part of the extension it came through.
+          forms: askForm(),
         }),
       storage,
       log,
@@ -267,7 +293,10 @@ export function activateConductor(context: vscode.ExtensionContext): ConductorAc
     defaultRuntimeId: () => settings().defaultRuntime,
     showThinking: () => settings()["ui.showThinking"],
     slashCommands: () => settings()["ui.slashCommandAllowlist"],
-    pick: (items, options) => vscode.window.showQuickPick(items, options),
+    // The window's one form surface, shared with the connection wizard rather
+    // than a second call to the same API: what answers a question should not
+    // depend on which part of the extension asked it.
+    pick: (items, options) => askForm().pick(items, options),
     runtimes: async () => runtimes().map(asChoice),
     modelCatalog: (runtimeId) =>
       runtimes().find((spec) => spec.id === runtimeId)?.modelCatalog ?? [],
@@ -318,7 +347,7 @@ export function activateConductor(context: vscode.ExtensionContext): ConductorAc
     vscode.commands.registerCommand("agentConductor.connectCli", () =>
       connectCli(
         wizardHost(context, {
-          form: formHost(),
+          form: askForm(),
           consent: askConsent(),
           channel,
           runtimes,
@@ -374,14 +403,30 @@ export function activateConductor(context: vscode.ExtensionContext): ConductorAc
             useConsent: (host) => {
               consent = host;
             },
-            grantTrust: async (runtimeId) => {
+            useForm: (host) => {
+              form = host;
+            },
+            orchestrationAddress: () => conductor.address(),
+            grantTrust: async (runtimeId, suppression) => {
               const spec = runtimes().find((entry) => entry.id === runtimeId);
               if (!spec) throw new Error(`runtime ${runtimeId} is not configured`);
-              const runtime = await resolveRuntime(spec, { executable: executablePort() });
+              const workspace = workspaceRoots()[0];
+              const runtime = await resolveRuntime(spec, {
+                executable: executablePort(),
+                ...(workspace ? { workspace } : {}),
+              });
               // The fingerprint, never a flag: trust is re-derived from the
               // resolved identity on every spawn (ADR-0007). Written through the
               // same call the wizard uses, so there is one writer of trust.
-              await recordTrust(runtimeId, { fingerprint: runtime.fingerprint });
+              await recordTrust(runtimeId, {
+                fingerprint: runtime.fingerprint,
+                // Recorded against the workspace it was gathered in, as the
+                // wizard records it: a plan that suppresses through a workspace
+                // file was verified where that file is, and nowhere else.
+                ...(suppression
+                  ? { suppression: { ...suppression, ...(workspace ? { workspace } : {}) } }
+                  : {}),
+              });
               return runtime.fingerprint;
             },
           },
@@ -439,32 +484,4 @@ const trustKey = (runtimeId: string): string => `runtimeTrust.${runtimeId}`;
  */
 function workspaceRoots(): string[] {
   return fileRoots(vscode.workspace.workspaceFolders ?? []);
-}
-
-/**
- * Opens one recorded diff. Both sides are virtual documents: the right-hand side
- * is what the Agent reported writing, which is not the same thing as what the
- * file says now.
- */
-async function openDiff(diffs: DiffDocuments, id: unknown): Promise<void> {
-  if (typeof id !== "string") return;
-  const entry = diffs.entry(id);
-  if (!entry) {
-    void vscode.window.showInformationMessage("That diff is no longer available.");
-    return;
-  }
-  const side = (which: string): vscode.Uri =>
-    vscode.Uri.from({ scheme: DIFF_SCHEME, path: displayPath(entry.path), query: `${id}:${which}` });
-  await vscode.commands.executeCommand(
-    "vscode.diff",
-    side("old"),
-    side("new"),
-    `${basename(entry.path)} (agent diff)`,
-  );
-}
-
-/** A URI path is slash-separated and rooted; this one is only ever a label. */
-function displayPath(path: string): string {
-  const slashed = path.replace(/\\/g, "/");
-  return slashed.startsWith("/") ? slashed : `/${slashed}`;
 }

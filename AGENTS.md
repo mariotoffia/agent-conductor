@@ -76,7 +76,9 @@ make check       # build + lint + test
 make check-all   # the above + the VS Code extension tests against a mock agent
 ```
 
-`make test-integration` downloads VS Code once, into `.vscode-test/`, and runs the extension inside it against the bundled mock Agent. It fails three ways, not one: a test that fails, a suite that registered nothing, and a suite that registered tests and ran fewer — every one skipped, a test with no body, or a `.only` left behind after debugging. The last is the one that will actually happen, and a passing count hides it best.
+`make test-integration` downloads VS Code once, into `.vscode-test/`, and runs the extension inside it against the bundled mock Agent. It fails four ways, not one: a test that fails; a suite that registered nothing; a suite that registered tests and ran fewer — every one skipped, a test with no body, or a `.only` left behind after debugging; and a run that exits zero having printed no count at all, which is what VS Code refusing to download, or a harness dying before Mocha starts, looks like. The third is the one that will actually happen, and a passing count hides it best.
+
+Its transcript — a hundred lines of a window starting and stopping — goes to `reports/integration.log`, and the terminal gets the count, the duration and the failure. `make gate-selftest` re-proves that refusal, as it does for every other checker here.
 
 Launched from inside VS Code it drops the `VSCODE_*`, `ELECTRON_*` and `NODE_OPTIONS` variables it inherited, which would otherwise make the VS Code it starts behave as the outer window's extension host.
 
