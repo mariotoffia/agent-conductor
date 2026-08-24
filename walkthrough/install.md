@@ -2,7 +2,9 @@
 
 Agent Conductor drives a coding CLI you already have. Install at least one:
 
-- **Claude Code**, **Codex**, **Gemini CLI** or **Copilot CLI**
+- **Claude Code** or **Codex** — the wizard installs their ACP adapter for you, at one exact version, as its own step.
+- **Gemini CLI** — `brew install gemini-cli`, or `npm install -g @google/gemini-cli`
+- **Copilot CLI** — `brew install --cask copilot-cli`, or `npm install -g @github/copilot`
 - **DeepSeek Harness** (a developer preview) — once, after installing `dsh`, give it a profile that carries DeepSeek's own ACP plugin:
 
   ```bash

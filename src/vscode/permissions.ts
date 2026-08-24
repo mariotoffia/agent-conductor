@@ -111,6 +111,15 @@ export const MAX_LABEL_CHARS = 80;
 /** Everything a single consent dialog will show. Callers that compose a detail
  *  from several parts size those parts against this. */
 export const MAX_DETAIL_CHARS = 2_000;
+/**
+ * The share of one of those dialogs the catalog's own advice may take — how to
+ * install a Runtime, and what it needs before it will run.
+ *
+ * Half, because the other half is the reason it could not launch: text this
+ * Client did not write and cannot predict the length of. Advice long enough to
+ * spend the whole budget would drop that reason and say nothing about it.
+ */
+export const WAYS_CHARS = MAX_DETAIL_CHARS / 2;
 
 export class PermissionRouter implements PermissionPort, Consent {
   readonly #policy: PermissionPolicy;

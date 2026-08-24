@@ -94,7 +94,7 @@ There is one extension file, and its manifest may only ask VS Code for an API pr
 
 ## Adding a runtime
 
-1. Add its `RuntimeSpec` to the catalog (`src/core/runtimeRegistry.ts`): how to launch it, how to detect it, how to log in, and its quirks.
+1. Add its `RuntimeSpec` to the catalog (`src/core/runtimeCatalog.ts`): how to launch it, how to log in, how its vendor documents installing it, anything else it needs before it will run, and its quirks. `src/core/runtimeRegistry.ts` beside it resolves an entry against the machine and applies the user's overrides; it does not grow with a new runtime.
 2. Write its `SuppressionPlan` (`src/core/policy.ts`) with a test beside it that pins the exact arguments, environment and `_meta`.
 3. Add wizard hints. The authentication check uses ACP's `authMethods` — do not special-case a CLI unless the protocol offers nothing.
 4. New terms go in `UBIQUITOUS.md`. New trade-offs get an ADR.

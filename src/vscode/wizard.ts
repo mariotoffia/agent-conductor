@@ -7,7 +7,7 @@ import {
 } from "../core/index.js";
 import type { RuntimeSetting } from "./config.js";
 import type { QuickItem } from "./elicitation.js";
-import { clampForDisplay, MAX_DETAIL_CHARS, MAX_LABEL_CHARS } from "./permissions.js";
+import { WAYS_CHARS, clampForDisplay, MAX_DETAIL_CHARS, MAX_LABEL_CHARS } from "./permissions.js";
 import { ask, Cancelled, pickIndex, report, shownName } from "./wizardAsk.js";
 import { plainText } from "./sealing.js";
 import type { Connection, WizardPorts } from "./wizardPorts.js";
@@ -126,6 +126,23 @@ async function chooseRuntime(ports: WizardPorts): Promise<Connection> {
   return notReady(ports, chosen);
 }
 
+/**
+ * What the catalog knows about making this Runtime runnable, as dialog text.
+ *
+ * Catalog constants, so nothing here is a repository's to write. Installing is
+ * shown only where this Client has no Adapter to offer instead, and setting up
+ * only where being installed is not enough (ADR-0007: a CLI is the user's to
+ * install, and we say how rather than doing it).
+ */
+export function ourWays(spec: Pick<RuntimeSpec, "install" | "setup">): string {
+  const block = (heading: string, lines?: string[]): string =>
+    lines && lines.length > 0 ? `${heading}\n${lines.join("\n")}\n\n` : "";
+  return (
+    block("Install it with one of:", spec.install) +
+    block("Once installed, it also needs:", spec.setup)
+  );
+}
+
 /** A disabled Runtime as it would be with the switch flipped, so the wizard can
  *  offer it and approve the identity it would actually launch under. */
 function enabledAgain(
@@ -146,12 +163,21 @@ async function notReady(ports: WizardPorts, chosen: RuntimeDetection): Promise<C
   const { adapter } = chosen.spec;
   const install = adapter ? `Install ${adapter.package}@${adapter.version}` : undefined;
   const enter = "Enter a launch command…";
+  // Ours first, the reason second: the reason is as long as whatever refused
+  // it, and what a person needs in order to act must not be what falls off the
+  // end of a bounded modal. Bounded all the same, and to a share of the budget
+  // rather than the whole of it — text of ours long enough to spend the budget
+  // would drop the reason entirely and say nothing about having done so.
+  const ways = clampForDisplay(ourWays(chosen.spec), WAYS_CHARS);
   const choice = await ports.consent.ask(
     `${shownName(chosen.spec.displayName)} cannot be launched yet.`,
     // Flattened: runtime settings are window-scoped, so the command quoted back
     // here can be a repository's — and a line of its own in a dialog about
     // whether to trust a launch is what an approval is made of (ADR-0007).
-    { modal: true, detail: clampForDisplay(plainText(chosen.problem ?? ""), MAX_DETAIL_CHARS) },
+    {
+      modal: true,
+      detail: ways + clampForDisplay(plainText(chosen.problem ?? ""), MAX_DETAIL_CHARS - ways.length),
+    },
     ...[install, enter].filter((option): option is string => Boolean(option)),
   );
   if (!choice) throw new Cancelled();

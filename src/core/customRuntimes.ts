@@ -1,4 +1,5 @@
-import type { BaseRuntime, RuntimeOverride } from "./runtimeRegistry.js";
+import type { RuntimeOverride } from "./runtimeRegistry.js";
+import type { BaseRuntime } from "./runtimeCatalog.js";
 
 /**
  * Runtimes that exist only because settings describe them.

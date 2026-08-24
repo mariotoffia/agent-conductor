@@ -13,7 +13,7 @@ import {
 } from "../core/index.js";
 import { readBackLine } from "./chatSink.js";
 import { asQuickItem } from "./elicitation.js";
-import { clampForDisplay, MAX_DETAIL_CHARS, MAX_LABEL_CHARS } from "./permissions.js";
+import { clampForDisplay, MAX_DETAIL_CHARS, MAX_LABEL_CHARS, WAYS_CHARS } from "./permissions.js";
 import { ask, Cancelled, pickIndex, report, safeText, shownName } from "./wizardAsk.js";
 import { mergeEntry } from "./wizardSettings.js";
 import type { Connection, WizardPorts } from "./wizardPorts.js";
@@ -106,10 +106,17 @@ async function offerAuthHandoff(ports: WizardPorts, state: Connection, error: un
   // to take a credential, and the failure printed beside it is as long as the
   // Agent cares to make it — put second, it would push these off the end of a
   // bounded modal and leave the Agent answering for where a pasted key goes.
+  // A CLI that is installed but not set up fails here rather than at detection,
+  // so what it still needs belongs in this dialog — and is paid for out of the
+  // same budget, which is what keeps the parts adding up.
+  const setup =
+    state.spec.setup && state.spec.setup.length > 0
+      ? clampForDisplay(`\n\nIf it is not set up yet:\n${state.spec.setup.join("\n")}`, WAYS_CHARS)
+      : "";
   const ours =
     "If it needs signing in, do that in the CLI itself and continue." +
     " Agent Conductor never collects or proxies a credential — a key you paste is stored" +
-    " in VS Code's secret storage, and settings keep only its name.\n\nIt said: ";
+    ` in VS Code's secret storage, and settings keep only its name.${setup}\n\nIt said: `;
   const choice = await ports.consent.ask(
     `${shownName(state.spec.displayName)} could not open a session.`,
     {

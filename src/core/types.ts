@@ -83,6 +83,20 @@ export interface RuntimeSpec {
   baseArgs?: string[];
   /** Command the wizard opens in a terminal when the agent reports auth is required. */
   loginCommand?: string;
+  /**
+   * How its vendor documents installing this CLI, for a Runtime this Client has
+   * no Adapter to offer. Shown when the command is missing, never run for the
+   * user: installing a CLI is theirs to do (ADR-0007). Catalog text only —
+   * settings cannot supply it, so nothing a repository writes reaches a dialog
+   * through here.
+   */
+  install?: string[];
+  /**
+   * What else it needs before it will launch, once installed. Shown beside the
+   * failure that is really this — a session that would not open — because a CLI
+   * that is present but unconfigured fails there rather than at detection.
+   */
+  setup?: string[];
   /** Effective per-session policy this entry was built with. Part of the launch
    *  identity: suppression rides in argv, env, and `_meta`, so a Runtime that
    *  suppresses nothing is not the Runtime the user approved (ADR-0008). */
