@@ -41,7 +41,7 @@ Code, settings keys, docs and commit messages use these words with exactly these
 | **Depth Cap** | `maxSpawnDepth`. Below it we do not inject the Shim at all. That is what stops the recursion. |
 | **Isolation** | How changes are kept apart: a `shared` working directory, or a dedicated git `worktree`. It is not a security boundary. |
 | **Probe Session** | A throwaway session the wizard opens to check authentication and discover Config Options. |
-| **Smoke Test** | A wizard step: one short prompt that proves streaming and Read-back work end to end. The Agent must answer it and nothing else; anything longer ends the connection. |
+| **Smoke Test** | A wizard step: one short prompt that proves streaming and Read-back work end to end. The answer must arrive as a segment of its own — a line, or a chunk of the Agent's stream — with nothing worded around it in that segment. Noise in other segments is a CLI quirk and is tolerated: real CLIs print banners beside their answer, and refusing them refuses a healthy connection. A reply that overflows the bound still fails, whatever is in it. |
 | **Fan-out Consent** | The user's agreement that one Runtime may be handed work by an agent on another provider. Recorded against that Runtime's trust fingerprint, so it lapses exactly when the trust does. Without it, direct Sessions still work. |
 | **Registry** | The machine-readable list of ACP agents. Everything it publishes is a way to *download* an agent, never a way to launch one already installed — so we take only the exact adapter *version* from it. Validated, size-limited, cached, pinnable, optional: the built-in catalog works offline. |
 | **Facade** | An interface that exposes the Conductor to other editors (ACP-agent soon, AHP later). |

@@ -153,6 +153,9 @@ export async function openProbeSession(request: ProbeRequest): Promise<Probe> {
   const remove = (): Promise<void> => rm(directory, { recursive: true, force: true });
 
   let reply = "";
+  /** What was said, chunk by chunk: the stream's own segmentation is one of the
+   *  two ways an answer can stand apart from a banner (UBIQUITOUS: Smoke Test). */
+  const chunks: string[] = [];
   /** The Agent said more than the step asked for, whatever the start of it says. */
   let overflowed = false;
   try {
@@ -178,6 +181,9 @@ export async function openProbeSession(request: ProbeRequest): Promise<Probe> {
           // nothing about how much is held.
           overflowed ||= reply.length + said.length > MAX_SMOKE_REPLY_CHARS;
           reply = (reply + said).slice(0, MAX_SMOKE_REPLY_CHARS);
+          // Kept only until the bound: past it the verdict is already failed,
+          // and a flood must not become a list either.
+          if (!overflowed) chunks.push(said);
         },
       },
       {
@@ -190,12 +196,12 @@ export async function openProbeSession(request: ProbeRequest): Promise<Probe> {
       directory,
       async smoke(): Promise<SmokeResult> {
         reply = "";
+        chunks.length = 0;
         overflowed = false;
         const response = await session.prompt(SMOKE_PROMPT);
-        const said = reply.trim();
         return {
-          ok: !overflowed && isSmokeReply(said),
-          reply: said,
+          ok: !overflowed && smokeVerdict(reply, chunks),
+          reply: reply.trim(),
           stopReason: response.stopReason,
         };
       },
@@ -213,14 +219,34 @@ export async function openProbeSession(request: ProbeRequest): Promise<Probe> {
   }
 }
 
-/** Whether a reply is the Smoke Test's answer and nothing else. Punctuation is
- *  allowed around it — an Agent that says `OK.` answered the question — but a
- *  sentence containing the word did not. */
+/**
+ * The Smoke Test verdict: did the answer arrive as a segment of its own?
+ *
+ * A segment is a line of the reply, or a suffix of it that starts where one of
+ * the Agent's own chunks did — real CLIs print a banner beside their answer,
+ * and Copilot fuses the two with no line ending at all, so the stream's own
+ * segmentation has to count or a healthy CLI is refused. Each candidate is
+ * still held to `isSmokeReply` whole: words fused onto the answer inside one
+ * segment are a reply that did not follow the instruction. What an ugly-but-
+ * accepted reply can do to the report is the display's problem, and is handled
+ * there by bounds, sealing, and the Read-back's budget priority.
+ */
+export function smokeVerdict(reply: string, chunks: readonly string[]): boolean {
+  if (reply.split(/\r\n|[\r\n]/).some((line) => isSmokeReply(line))) return true;
+  let suffix = "";
+  for (let at = chunks.length - 1; at >= 0; at -= 1) {
+    suffix = (chunks[at] ?? "") + suffix;
+    if (isSmokeReply(suffix)) return true;
+  }
+  return false;
+}
+
+/** Whether one segment is the Smoke Test's answer and nothing else. Punctuation
+ *  is allowed around it — an Agent that says `OK.` answered the question — but a
+ *  sentence containing the word did not, and neither did anything spanning a
+ *  line ending: segmentation is `smokeVerdict`'s job, not this rule's. */
 export function isSmokeReply(reply: string): boolean {
   const said = reply.trim();
-  // One line: a line ending is not a letter either, so without this a reply of
-  // three hundred blank lines and an "ok" would answer — and the Agent would
-  // then be choosing which line of the wizard's report gets seen.
   if (/[\r\n]/.test(said)) return false;
   // Anything that is not a letter or a number may sit around it — a full stop, a
   // quotation mark. A word may not, in any script: `\W` is the ASCII complement,
