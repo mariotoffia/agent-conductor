@@ -20,7 +20,7 @@ CORE_PAT ?= ['\"\`]vscode['\"\`]
 
 .DEFAULT_GOAL := help
 .PHONY: help install doctor build watch lint typecheck core-imports gate-selftest pipe-probe \
-        test test-integration check check-all package release registry-cache adr plan clean
+        test test-integration smoke-live check check-all package release registry-cache adr plan clean
 
 help: ## Show this help
 	@awk 'BEGIN {FS = ":.*##"} /^[a-zA-Z_-]+:.*?##/ { printf "  \033[36m%-18s\033[0m %s\n", $$1, $$2 }' $(MAKEFILE_LIST)
@@ -127,6 +127,11 @@ test-integration: build ## VS Code extension host tests against the mock agent â
 	@mkdir -p $(REPORTS)
 	@set +e; $(NPM) run test:integration > $(REPORTS)/integration.log 2>&1; status=$$?; \
 	  set -e; $(NODE) scripts/report-integration.mjs $(REPORTS)/integration.log $$status
+
+# Manual and optional by rule (PERSONAS.md): CI must not require installed CLIs,
+# credentials, subscriptions, or network â€” so no check target reaches this.
+smoke-live: ## Probe installed agent CLIs live, with the wizard's own Smoke Test (manual)
+	$(NODE) --import tsx src/test/smoke-live.ts
 
 check: build lint test ## Build + lint + unit tests
 check-all: build lint test test-integration ## check + extension-host integration (release gate)

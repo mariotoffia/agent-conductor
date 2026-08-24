@@ -41,7 +41,7 @@ Owns `src/test/**` and the mock agent.
 Goal: everything provable without a real CLI.
 
 - Must: extend the mock agent when a scenario is missing, before writing the test. Pin behaviour with golden files. Name tests after the behaviour they protect.
-- Must not: add a CI test that needs an installed CLI or the network. Live smoke tests stay optional and manual.
+- Must not: add a CI test that needs an installed CLI or the network. Live smoke tests stay optional and manual — `make smoke-live` is that, and nothing in `make check` or `make check-all` may reach it.
 
 ### Docs Steward
 
