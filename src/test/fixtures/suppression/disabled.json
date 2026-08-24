@@ -37,5 +37,13 @@
       "env": {}
     },
     "suppression": null
+  },
+  "dsh": {
+    "launch": {
+      "command": "dsh-acp",
+      "args": [],
+      "env": {}
+    },
+    "suppression": null
   }
 }

@@ -29,6 +29,7 @@ export const installed = executables({
   "codex-acp": "/opt/bin/codex-acp",
   gemini: "/opt/bin/gemini",
   copilot: "/opt/bin/copilot",
+  "dsh-acp": "/opt/bin/dsh-acp",
 });
 
 /** A built-in Runtime with the fields under test replaced. */

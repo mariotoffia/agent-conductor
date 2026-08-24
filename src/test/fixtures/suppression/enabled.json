@@ -98,5 +98,13 @@
         "read_agent"
       ]
     }
+  },
+  "dsh": {
+    "launch": {
+      "command": "dsh-acp",
+      "args": [],
+      "env": {}
+    },
+    "suppression": null
   }
 }

@@ -84,7 +84,16 @@ test("built-in ids are unique and every entry names something launchable", () =>
   assert.equal(new Set(ids).size, ids.length);
   for (const runtime of runtimes) {
     assert.ok(runtime.launch.command.length > 0, `${runtime.id}: empty command`);
-    assert.ok((runtime.suppression?.delegationTools.length ?? 0) > 0, `${runtime.id}: nothing to verify`);
+    if (runtime.suppression === undefined) {
+      // The one built-in allowed no recipe: nothing documented switches dsh's
+      // own subagents off, and a recipe with invented tool names would verify
+      // nothing real. No plan means no Shim (ADR-0008) — named here so a
+      // second plan-less built-in, or dsh gaining a recipe, is a deliberate
+      // change and not a drift.
+      assert.equal(runtime.id, "dsh", `${runtime.id}: a built-in lost its plan`);
+      continue;
+    }
+    assert.ok(runtime.suppression.delegationTools.length > 0, `${runtime.id}: nothing to verify`);
   }
 });
 

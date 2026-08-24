@@ -63,6 +63,8 @@ until the protocol can carry the evidence.
 | `copilot --acp --stdio` starts Copilot CLI's ACP server; `--excluded-tools` and `--effort` (`low`…`max`) apply to every session it creates — process-scoped, as the catalog's quirks say | Verified | [docs.github.com](https://docs.github.com/en/copilot/reference/copilot-cli-reference/acp-server) |
 | Anthropic policy: third-party products use API-key authentication and may not route through Free/Pro/Max subscription credentials — why Claude launches with `--hide-claude-auth` (ADR-0010) | Verified | [code.claude.com/docs/en/legal-and-compliance](https://code.claude.com/docs/en/legal-and-compliance) |
 | `--hide-claude-auth` removes the subscription auth method and rejects subscription credentials at session start | Corroborated (third-party analysis; our argv is pinned by test) | [vanssata/jetbrains-claude-subscription](https://github.com/vanssata/jetbrains-claude-subscription) |
+| DeepSeek Harness: `@deepseek-ai/dsh@0.1.1-rc.2` (bin `dsh`) is a developer preview; the vendor's `@deepseek-ai/dsh-acp@0.1.1-rc.1` declares **no executable and no `dsh.bundle`**, so nothing launchable exists on the official route yet | Verified | [registry.npmjs.org](https://registry.npmjs.org/@deepseek-ai/dsh-acp) |
+| The catalogued dsh adapter `@openma/deepseek-harness-acp@0.4.24` (bin `dsh-acp`, Apache-2.0, trusted-publisher CI) exists and starts, and **did not answer an ACP `initialize` within the probe deadline against dsh 0.1.1-rc.2** — the preview runtime is catalogued but has not yet completed a handshake anywhere we can see | Verified (the failure, too) | [registry.npmjs.org](https://registry.npmjs.org/@openma/deepseek-harness-acp) · [openma-ai/deepseek-harness-acp](https://github.com/openma-ai/deepseek-harness-acp) |
 
 ### Not verified
 
@@ -77,6 +79,9 @@ each recipe disables — have no primary source that lists them:
   `collab`.
 - The Claude adapter's `_meta.claudeCode.options` passthrough (its own source
   is the authority; not re-read for this record).
+- Any way of switching DeepSeek Harness's own subagents off: nothing documents
+  one, so the catalog's `dsh` entry carries no Suppression Plan at all rather
+  than an invented recipe — which keeps it ineligible for the Shim outright.
 
 Nothing rests on them: a plan counts only when a live tool list proves the
 named tools gone, no such list can be obtained (see above), so every one of

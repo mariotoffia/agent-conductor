@@ -81,6 +81,22 @@ function baseRuntimes(): BaseRuntime[] {
       loginCommand: "copilot",
       quirks: { processScopedConfig: true, effortReadback: false, slashCommandAllowlist: ["context", "plan", "review"] },
     },
+    {
+      id: "dsh",
+      // The vendor calls dsh a developer preview with breaking changes ahead,
+      // and no adapter has yet completed an ACP handshake against it — so the
+      // name says both, on every surface that draws it, since the wizard would
+      // otherwise offer an install that leads nowhere. Its own
+      // @deepseek-ai/dsh-acp ships no executable yet; the pin is the third-party
+      // ACP server, not in the ACP Registry, and moves only by catalog change.
+      // No suppression recipe is documented, so dsh carries no plan and cannot
+      // host the Shim (ADR-0008).
+      displayName: "DeepSeek Harness (preview — no adapter has connected yet)",
+      launch: { command: "dsh-acp", args: [], env: {} },
+      adapter: { package: "@openma/deepseek-harness-acp", version: "0.4.24", bin: "dsh-acp" },
+      loginCommand: "dsh-acp login",
+      quirks: { processScopedConfig: false, effortReadback: false, slashCommandAllowlist: [] },
+    },
   ];
 }
 

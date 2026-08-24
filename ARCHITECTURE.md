@@ -181,6 +181,7 @@ Built-in runtimes:
 | `codex` | adapter | `CODEX_CONFIG` applies to the whole process |
 | `gemini` | native `--acp` | suppression writes a workspace settings file, and asks first |
 | `copilot` | native `--acp --stdio` | model, effort and tools are fixed when the process starts |
+| `dsh` | adapter (preview) | DeepSeek Harness; no documented suppression recipe, so no plan and never the Shim |
 | custom | user-defined | any ACP agent |
 
 Every session owns one agent process.
