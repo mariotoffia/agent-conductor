@@ -39,8 +39,8 @@ An agent CLI is a program that runs with your permissions. It is not a sandboxed
 | `make build` / `make watch` | builds `dist/extension.cjs` and `dist/mcp-shim.cjs` |
 | `make lint` / `make test` | the two checks that say your work is done; full logs land in `reports/` |
 | `make check` / `make check-all` | both of the above, plus a build (`check-all` also runs the VS Code tests) |
-| `make package` / `make package-rich` | builds the Marketplace extension file / one for sideloading |
-| `make release` | the full check plus both extension files |
+| `make package` | builds the Marketplace extension file |
+| `make release` | the full check plus the extension file |
 | `make adr NAME=…` / `make plan NAME=…` | starts a new decision record / plan |
 
 ## Documentation

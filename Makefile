@@ -20,7 +20,7 @@ CORE_PAT ?= ['\"\`]vscode['\"\`]
 
 .DEFAULT_GOAL := help
 .PHONY: help install doctor build watch lint typecheck core-imports gate-selftest pipe-probe \
-        test test-integration check check-all package package-rich release registry-cache adr plan clean
+        test test-integration check check-all package release registry-cache adr plan clean
 
 help: ## Show this help
 	@awk 'BEGIN {FS = ":.*##"} /^[a-zA-Z_-]+:.*?##/ { printf "  \033[36m%-18s\033[0m %s\n", $$1, $$2 }' $(MAKEFILE_LIST)
@@ -134,17 +134,15 @@ check-all: build lint test test-integration ## check + extension-host integratio
 package: build ## Marketplace VSIX (stable APIs only)
 	npx @vscode/vsce package --out dist/agent-conductor.vsix
 
-package-rich: build ## Sideload VSIX with proposed APIs (chatSessions build)
-	@$(NODE) scripts/gen-rich-manifest.mjs
-	@npx @vscode/vsce package --out dist/agent-conductor-rich.vsix; status=$$?; \
-	  $(NODE) scripts/gen-rich-manifest.mjs --restore; \
-	  exit $$status
-
-release: ## Full gate + both VSIX artifacts; tagging/publishing stay human actions
+# There is no second, proposed-API package target. A manifest may only ask VS
+# Code for a proposal this extension implements, and the sessions proposal is
+# not implementable here yet — no proposed declarations to compile against and
+# an extension-host gate that runs stable VS Code (ADR-0011).
+release: ## Full gate + the VSIX; tagging/publishing stay human actions
 	@git diff --quiet && git diff --cached --quiet || { echo "working tree dirty — commit first"; exit 1; }
-	$(MAKE) check-all package package-rich
+	$(MAKE) check-all package
 	@v=$$(node -p "require('./package.json').version"); \
-	echo ""; echo "release artifacts in dist/:"; ls -1 dist/*.vsix; \
+	echo ""; echo "release artifact in dist/:"; ls -1 dist/*.vsix; \
 	echo "next: git tag v$$v && git push --tags  (publish is manual — AGENTS.md)"
 
 registry-cache: ## Refresh the cached ACP agent registry snapshot (dev aid)

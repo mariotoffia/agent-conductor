@@ -13,9 +13,8 @@ Nothing is shared between two CLIs. When one agent hands work to another, it han
 ```
 ┌─ VS Code window ────────────────────────────────────────────────────────┐
 │  UI layer (src/vscode/**, may import core)                              │
-│  ├─ Chat participant @conductor        (stable API — Marketplace build) │
-│  ├─ Sessions tree · transcript webview · Connect-a-CLI wizard           │
-│  └─ chatSessions provider              (proposed API — VSIX build only) │
+│  ├─ Chat participant @conductor                            (stable API) │
+│  └─ Sessions tree · transcript webview · Connect-a-CLI wizard           │
 │                                                                         │
 │  Conductor core (src/core/**, NO `vscode` imports — extraction seam)    │
 │  ├─ RuntimeRegistry   catalog · detection · ACP-Registry resolution     │

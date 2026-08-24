@@ -22,7 +22,7 @@ Owns `src/vscode/**`.
 
 Goal: show every kind of Update faithfully, and a wizard people can follow.
 
-- Must: use stable VS Code APIs in the Marketplace build, with proposed APIs strictly behind the build flag. Follow the render map in `ARCHITECTURE.md §Data flows`. Keep the chat handler from blocking.
+- Must: use stable VS Code APIs only — a manifest may not ask for an API proposal this extension does not implement (ADR-0011). Follow the render map in `ARCHITECTURE.md §Data flows`. Keep the chat handler from blocking.
 - Must not: reach past the core's public API. Block the extension host on a child process.
 
 ### Orchestration Engineer
@@ -56,10 +56,10 @@ Goal: one place to look for each thing.
 
 Owns `Makefile`, `esbuild.mjs` and packaging.
 
-Goal: two build channels that come out the same every time — Marketplace and sideload.
+Goal: one build channel that comes out the same every time — the Marketplace extension file (ADR-0011).
 
 - Must: keep `make check-all` as the release gate. Write a changelog per release.
-- Must not: run `vsce publish` — that is a human's decision. Ship a proposed API to the Marketplace channel.
+- Must not: run `vsce publish` — that is a human's decision. Declare an API proposal with no provider behind it.
 
 ## Personas as product presets
 

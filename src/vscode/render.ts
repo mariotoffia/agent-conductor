@@ -7,10 +7,11 @@ import type { Assert } from "./permissions.js";
  * draw out (ADR-0002).
  *
  * Nothing here knows which surface it is drawing to, and nothing here calls into
- * VS Code — a chat participant, a session provider, or a test can each consume
- * the same items. Keeping the mapping pure is what makes "every documented
- * Update is rendered" a statement a test can check, rather than a claim about
- * code that only runs inside an extension host.
+ * VS Code. There is one sink today — the chat participant's — and a test consumes
+ * the same items it does; a second surface is an addition rather than a rewrite,
+ * which is the whole reason this stays pure (ADR-0011). Keeping the mapping pure
+ * is also what makes "every documented Update is rendered" a statement a test can
+ * check, rather than a claim about code that only runs inside an extension host.
  *
  * Every variant of ACP's `SessionUpdate` union maps to an item. An Agent may
  * still send one this Client's protocol version never documented, so the union

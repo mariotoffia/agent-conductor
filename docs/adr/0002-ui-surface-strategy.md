@@ -1,7 +1,8 @@
 # ADR-0002: A stable chat participant first, with a second build for the richer UI
 
-- Status: accepted
+- Status: accepted; the second build channel is superseded by ADR-0011
 - Date: 2026-08-18
+- Superseded in part by: ADR-0011
 
 ## Context
 

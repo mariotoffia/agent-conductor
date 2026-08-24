@@ -21,7 +21,7 @@ Status: active. Plans are temporary; promote durable decisions to ADRs or canoni
 | Wizard, settings, and multiple Runtimes | Claude, Codex, Gemini, and Copilot can be validated and configured from live Config Options | Pending |
 | Orchestrator | Suppression, authenticated Shim tools, worktrees, limits, cancellation cascade, and Sessions tree pass integration tests | Partial — the Sessions tree passes extension-host tests; the rest waits on the Shim and Orchestrator |
 | Real release gate | `make check-all` runs non-empty extension-host tests against the mock Agent | Pending |
-| Rich VSIX build | Proposed Session UI has render parity with the stable sink, or the unfinished package target is removed | Pending |
+| Rich VSIX build | Proposed Session UI has render parity with the stable sink, or the unfinished package target is removed | Removed — no second build channel exists (ADR-0011) |
 | ACP-agent Facade | Conductor is exposed as an ACP Agent by reusing `src/core` | Deferred until the MVP gates pass |
 
 ## Audit Basis
@@ -58,7 +58,7 @@ Authority order used by the audit:
 | Orchestrator | Absent | No spawn tree, limits, budget, worktree, or child cancellation code | Implement after the direct Session path and security decisions are green. |
 | Settings consumption and SecretStorage | Absent | Manifest settings are never read; runtime `env` can store secrets | Add typed configuration and secret references; remove plaintext secret paths. |
 | Stable Marketplace UI | Partial manifest only | Participant/view declarations exist | Complete stable UI before presenting the extension as usable. |
-| Rich proposed-API VSIX | Stub | Script only injects proposal names | Add the proposal contribution/provider or remove the target until implemented. |
+| Rich proposed-API VSIX | Removed | The generator and `package-rich` are gone; a gate refuses a manifest declaring a proposal nothing implements | None. Reviving the channel starts with an ADR superseding ADR-0011. |
 | Integration release gate | False positive | `test:integration` prints a placeholder and exits successfully | Replace it with an extension-host/mock-agent suite; an unavailable harness must fail. |
 | ACP-agent Facade | Deferred | Canonical architecture calls it planned/optional | Keep outside MVP until stable UI and orchestration gates pass. |
 | AHP support | Intentionally deferred | ADR-0001 | Do not implement without a superseding ADR. |
@@ -438,12 +438,21 @@ interface EffectiveSelection {
 
 ### Task 15: Complete or remove the rich build contract
 
-**Files:** Create `src/vscode/richSessions.ts` and proposal-specific tests, or modify `scripts/gen-rich-manifest.mjs` and `Makefile` to remove the unfinished target; update ADR-0002 if the decision changes.
+**Files:** Deleted `scripts/gen-rich-manifest.mjs`; modified `Makefile`, `README.md`, `AGENTS.md`, `ARCHITECTURE.md`, `PERSONAS.md`, `src/vscode/render.ts`; added `docs/adr/0011-one-render-surface-until-the-sessions-proposal-is-usable.md` and `src/test/unit/proposed_api_declarations.test.ts`; linked the supersession from ADR-0002.
 
-- [ ] Define one surface-neutral render model consumed by both stable and rich sinks.
-- [ ] If retained, generate both proposal declarations and the required `chatSessions` contribution, register the provider only in the rich build, and test render parity for every Update variant.
-- [ ] If proposal APIs have drifted or parity is not implementable, remove `package-rich` from the release gate rather than shipping a proposal-only manifest with no provider.
-- [ ] Run `make check-all package package-rich` only when the rich provider exists and tests pass. Commit: `feat: add rich session rendering` or `build: defer rich session package`.
+- [x] Keep one surface-neutral render model, so a second sink is an addition rather than a rewrite — one sink exists today.
+  - The model was already there and is unchanged: `src/vscode/render.ts` maps one Update to a list of items, knows no surface, and calls nothing in VS Code — with a compile-time proof that every variant of ACP's union is covered. What was corrected is its own description of itself. There is exactly one sink, the chat participant's, and the comment said otherwise; a render model that claims two consumers when it has one is a claim nobody can check.
+- [x] The rich sink is not implementable here, so the second build channel is removed rather than half-shipped.
+  - Three things have to exist before a proposed-API provider can be written, and none do: `@types/vscode` ships the stable API only and nothing in this toolchain fetches a `vscode.proposed.*.d.ts`, so under `strict` the provider will not compile; the extension-host gate launches stable VS Code with no `--enable-proposed-api`, so render parity would be a claim no gate could check; and the declarations move between VS Code releases, so the version pin is one that has to be chased.
+  - What existed was a script that copied the manifest, added two proposals, packaged, and put the original back. No provider was registered and the `chatSessions` contribution was never generated, so the second artifact `make release` shipped was the first one with two extra words in its manifest — and `vsce publish` refuses proposals anyway, leaving a sideload as its only route to someone expecting the better UI.
+- [x] Removed from the release gate, along with the target and the generator behind it.
+  - Deleting the target and leaving the generator would have kept a runnable thing that produces a manifest that lies; a target nobody runs rots into a target somebody runs.
+  - A gate replaces it, because the defect is one nothing in the build could see: a manifest may only ask VS Code for a proposal this extension implements, and it implements none. Both halves are exact — the committed manifest declares no proposal, and no build input writes that field either. The second half is the one that matters: a build step that rewrites the manifest on its way to `vsce` declares just as effectively and leaves the committed file looking innocent, which is precisely what was happening.
+  - The first version of that gate was blind to the defect it exists for. It scraped proposal names off the line that mentioned the field, so the same injection written across two lines passed it — the check was proved unfalsifiable by planting one, not by reading it. It now detects the field however the declaration is written, and its self-test proves each half fires on a fixture rather than only that the repository is currently clean.
+  - What it reads is what git says the repository is made of, not a list of the files that build it today. The list it started with was the second way to be blind: a build step added to a directory nobody had named would have been one the gate could not see, and a gate open to the next file added is open by default. Planting one there is now a failure, as is planting the field in the manifest, in a command `package.json` defines, and in the bundler across two lines.
+  - Adversarial review found the remaining heuristic and it is gone rather than repaired: "some production file mentions the name" was satisfied by a comment, and the prefix that excluded test sources would have swallowed a future `src/testing/`. Judging whether a provider is real is work for the ADR that revives the channel, not for a check standing in for one.
+- [x] Ran `make lint` and `make test` green; `package-rich` no longer exists to run. Commit: `build: defer rich session package`.
+  - `make check-all` does not pass on this branch, and does not pass without it either: the extension-host suite's delegation test fails on roughly one run in two or three, ending a Turn with nothing JSON-shaped in the stream and no duration against its name — it fails fast rather than waiting for a child. Nothing in this task can reach it. Its only change under `src/` is a comment, and `dist/extension.cjs` and `dist/mcp-shim.cjs` hash the same with the change and without it, so the extension host runs the identical bundle either way. It belongs to whoever owns the delegation gate.
 
 ### Task 16: Align user-facing documentation and release readiness
 
@@ -454,7 +463,7 @@ interface EffectiveSelection {
 - [ ] Verify current ACP and vendor claims against primary sources before release; record verification date and links in release documentation, not code.
 - [ ] Run `make lint` and `make test`; expect pass. Run `make check-all`; expect a real integration count greater than zero.
 - [ ] Confirm all code files are at most 500 lines and docs at most 600 lines; split by responsibility when exceeded.
-- [ ] Package with `make package` and, only if Task 15 retained it, `make package-rich`. Never publish automatically. Commit: `docs: describe verified Agent Conductor behavior`.
+- [ ] Package with `make package`. There is one extension file (ADR-0011). Never publish automatically. Commit: `docs: describe verified Agent Conductor behavior`.
 
 ## Deferred Work
 

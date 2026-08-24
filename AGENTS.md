@@ -86,7 +86,9 @@ The extension exposes the participant to those tests through an object it only b
 
 Keep output small: full logs go to `reports/`. For a passing run, report the command, the status, the count and the time. Only read the failing parts.
 
-Never run `vsce publish`. Building the extension file is `make package` / `make package-rich`; publishing it is a human decision.
+Never run `vsce publish`. Building the extension file is `make package`; publishing it is a human decision.
+
+There is one extension file, and its manifest may only ask VS Code for an API proposal this extension implements — it implements none. `make test` holds that in two halves: the manifest declares no proposal, and nothing else git tracks writes that field either — a build step that rewrites the manifest declares just as effectively while leaving the committed file looking innocent. Reviving a proposed-API build means a new ADR (ADR-0011).
 
 `.vscodeignore` is an allow-list, and it has to be: `vsce` keeps a file when any negation matches it, whatever else the file says and whatever the order, so `!dist/**` followed by exclusions ships everything under `dist/` regardless. It reports nothing when it is wrong — after changing what the build writes, check what would actually ship with `npx @vscode/vsce ls`.
 
