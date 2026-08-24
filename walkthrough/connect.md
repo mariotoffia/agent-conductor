@@ -8,6 +8,4 @@ Then it opens a throwaway session in a temporary directory, offers the models an
 
 You choose whether the connection is saved for every workspace or only this one. Whatever you had already configured for that CLI in that same place is kept, and settings a repository supplied for this workspace stay there rather than following you into other ones. If another settings file still describes the CLI differently, the wizard tells you the connection will not launch as approved.
 
-**Claude needs an API key.** Signing in with a claude.ai subscription is disabled by default: Claude is launched with `--hide-claude-auth`, which the approval you give covers. Your key is stored in VS Code's secret storage; your settings hold only the name of the key, never the key itself.
-
-Signing in otherwise happens in the CLI's own login command, which the wizard offers to open in a terminal, and waits for. Agent Conductor never collects or proxies a credential.
+Signing in happens in the CLI's own login command — `claude /login`, `codex login`, and so on — which the wizard offers to open in a terminal, and waits for. Claude then runs on your plan. If you would rather it used an API key, the wizard stores one in VS Code's secret storage and your settings hold only its name; an organisation can enforce that with `agentConductor.claude.hideSubscriptionAuth`, which launches Claude with `--hide-claude-auth` and is covered by the approval you give. Agent Conductor never collects or proxies a credential.

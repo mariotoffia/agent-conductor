@@ -1,6 +1,6 @@
 # ADR-0010: Claude needs an API key, and settings hold only the name of a secret
 
-- Status: accepted
+- Status: accepted; the Claude authentication default is superseded by ADR-0013
 - Date: 2026-08-18
 - Supersedes: ADR-0006
 

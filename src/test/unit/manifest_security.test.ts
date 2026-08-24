@@ -36,14 +36,14 @@ test("cross-runtime orchestration requires explicit opt-in", () => {
   assert.equal(settings["agentConductor.orchestration.enabled"].default, false);
 });
 
-test("Claude sessions default to API-key authentication", () => {
+test("Claude sessions use the CLI's own login unless the switch is on", () => {
   const setting = settings["agentConductor.claude.hideSubscriptionAuth"];
 
   assert.equal(setting.type, "boolean");
   // Whether a personal plan may be routed through a third-party product is not
   // a repository's to decide, whichever way this one is set (ADR-0010).
   assert.equal(setting.scope, "machine");
-  assert.equal(setting.default, true, "ADR-0010's posture is the default");
+  assert.equal(setting.default, false, "ADR-0013's posture is the default");
   // The description names the flag, and `subscription_auth.test.ts` pins that
   // the flag actually reaches the launch. A manifest describing a security
   // property the client does not have is the failure worth guarding against.

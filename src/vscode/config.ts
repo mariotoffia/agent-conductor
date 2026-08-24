@@ -161,7 +161,7 @@ const scalarSchema = z.object({
     .min(0)
     .max(MAX_ENV_CHARS)
     .default(DEFAULT_ENV_CHARS),
-  "claude.hideSubscriptionAuth": z.boolean().default(true),
+  "claude.hideSubscriptionAuth": z.boolean().default(false),
   "gemini.writeWorkspaceSettings": z.boolean().default(false),
   "registry.autoResolve": z.boolean().default(true),
   "registry.url": z

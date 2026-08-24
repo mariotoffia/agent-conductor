@@ -454,8 +454,8 @@
         "agentConductor.claude.hideSubscriptionAuth": {
           "scope": "machine",
           "type": "boolean",
-          "default": true,
-          "markdownDescription": "Pass `--hide-claude-auth` so Claude runs on an API key rather than a claude.ai subscription, as third-party products must. Part of the launch identity: changing it asks you to approve the runtime again."
+          "default": false,
+          "markdownDescription": "Pass `--hide-claude-auth` so Claude insists on an API key instead of the login Claude Code already has — for an organisation that wants API-key billing enforced. Part of the launch identity: changing it asks you to approve the runtime again."
         },
         "agentConductor.gemini.writeWorkspaceSettings": {
           "type": "boolean",

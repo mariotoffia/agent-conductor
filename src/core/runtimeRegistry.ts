@@ -120,12 +120,12 @@ function withPolicy(
   ours = true,
 ): RuntimeSpec {
   // Only a Runtime with a recipe for hiding subscription authentication carries
-  // that half, so a setting about one CLI does not change the identity of every
-  // other one.
+  // that half, so one CLI's setting leaves every other identity alone. Hidden
+  // only when the user said so: the CLI's own login is the default (ADR-0013).
   const effective: SessionPolicy = {
     suppressBuiltInSubagents: policy.suppressBuiltInSubagents,
     ...(base.subscriptionAuth
-      ? { hideSubscriptionAuth: ours && policy.hideSubscriptionAuth !== false }
+      ? { hideSubscriptionAuth: ours && policy.hideSubscriptionAuth === true }
       : {}),
   };
   const authArgs = effective.hideSubscriptionAuth ? (base.subscriptionAuth?.hideArgs ?? []) : [];

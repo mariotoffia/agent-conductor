@@ -32,7 +32,9 @@ ADR-0011), stable VS Code APIs only.
 - **Client services.** Permission routing keyed by what this client is about to
   do (never the agent's `ToolKind`), dirty-buffers-first file access, structured
   terminals, form elicitation. Consent and audit, not a sandbox (ADR-0007).
-- **Secrets.** Settings hold SecretStorage references, never values; agent
+- **Secrets and sign-in.** Claude runs on the login Claude Code already has;
+  `agentConductor.claude.hideSubscriptionAuth` enforces an API key instead
+  (ADR-0013). Settings hold SecretStorage references, never values; agent
   output is redacted before it reaches a log, a message or the transcript
   (ADR-0010).
 
@@ -61,7 +63,8 @@ until the protocol can carry the evidence.
 | The ACP Registry feed is reachable, `version: "1.0.0"`, and lists `claude-acp` and `codex-acp` under those package names | Verified | [cdn.agentclientprotocol.com](https://cdn.agentclientprotocol.com/registry/v1/latest/registry.json) |
 | `gemini --acp` starts Gemini CLI's ACP mode; its documentation does not mark the mode experimental | Verified | [google-gemini/gemini-cli docs](https://github.com/google-gemini/gemini-cli/blob/main/docs/cli/acp-mode.md) |
 | `copilot --acp --stdio` starts Copilot CLI's ACP server; `--excluded-tools` and `--effort` (`low`…`max`) apply to every session it creates — process-scoped, as the catalog's quirks say | Verified | [docs.github.com](https://docs.github.com/en/copilot/reference/copilot-cli-reference/acp-server) |
-| Anthropic policy: third-party products use API-key authentication and may not route through Free/Pro/Max subscription credentials — why Claude launches with `--hide-claude-auth` (ADR-0010) | Verified | [code.claude.com/docs/en/legal-and-compliance](https://code.claude.com/docs/en/legal-and-compliance) |
+| Anthropic's legal page: a third-party product may not offer a Claude.ai sign-in of its own or route through Free/Pro/Max credentials on behalf of its users; sign-in must complete through Anthropic's own flow — which `claude /login` is | Verified | [code.claude.com/docs/en/legal-and-compliance](https://code.claude.com/docs/en/legal-and-compliance) |
+| Anthropic's support article: a Claude plan covers "third-party apps that authenticate with your Claude subscription through the Agent SDK" (the adapter is one); the separate Agent SDK credit is paused and such usage draws from the plan's ordinary limits — why Claude now launches on the CLI's own login (ADR-0013) | Verified | [support.claude.com](https://support.claude.com/en/articles/15036540-use-the-claude-agent-sdk-with-your-claude-plan) |
 | `--hide-claude-auth` removes the subscription auth method and rejects subscription credentials at session start | Corroborated (third-party analysis; our argv is pinned by test) | [vanssata/jetbrains-claude-subscription](https://github.com/vanssata/jetbrains-claude-subscription) |
 | DeepSeek Harness: `@deepseek-ai/dsh@0.1.1-rc.2` (bin `dsh`) is a developer preview; the vendor's `@deepseek-ai/dsh-acp@0.1.1-rc.1` declares **no executable and no `dsh.bundle`**, so nothing launchable exists on the official route yet | Verified | [registry.npmjs.org](https://registry.npmjs.org/@deepseek-ai/dsh-acp) |
 | The catalogued dsh adapter `@openma/deepseek-harness-acp@0.4.24` (bin `dsh-acp`, Apache-2.0, trusted-publisher CI) exists and starts, and **did not answer an ACP `initialize` within the probe deadline against dsh 0.1.1-rc.2** — the preview runtime is catalogued but has not yet completed a handshake anywhere we can see | Verified (the failure, too) | [registry.npmjs.org](https://registry.npmjs.org/@openma/deepseek-harness-acp) · [openma-ai/deepseek-harness-acp](https://github.com/openma-ai/deepseek-harness-acp) |

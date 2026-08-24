@@ -5,14 +5,16 @@ import { identityDetail } from "../../vscode/wizardTrust.js";
 import { executables, installed } from "../runtime-fixtures.js";
 
 /**
- * Claude runs on an API key, not on somebody's claude.ai subscription (ADR-0010).
+ * Claude runs on the login the CLI already has unless the user hides it
+ * (ADR-0013); hiding it is what makes the adapter insist on an API key.
  *
- * The adapter is told so on its command line, which makes it part of the launch
- * identity: a Runtime approved with subscription authentication hidden is not
- * the same Runtime as one approved without it, and a settings change that turns
- * it off has to be approved again.
+ * The switch reaches the adapter on its command line, which makes it part of
+ * the launch identity: a Runtime approved with subscription authentication
+ * hidden is not the same Runtime as one approved without it, and a settings
+ * change either way has to be approved again.
  */
 
+/** The hidden configuration — every test below about the switch being *on*. */
 const policyWith = (overrides: Partial<SessionPolicy> = {}): SessionPolicy => ({
   suppressBuiltInSubagents: false,
   hideSubscriptionAuth: true,
@@ -22,7 +24,15 @@ const policyWith = (overrides: Partial<SessionPolicy> = {}): SessionPolicy => ({
 const runtimeOf = (id: string, policy: SessionPolicy) =>
   builtinRuntimes(policy).find((entry) => entry.id === id);
 
-test("claude is launched with subscription authentication hidden by default", () => {
+test("claude launches on the CLI's own login by default: no switch, no flag", () => {
+  // A policy that says nothing about it is the product default (ADR-0013).
+  const claude = runtimeOf("claude", { suppressBuiltInSubagents: false });
+
+  assert.deepEqual(claude?.launch.args, []);
+  assert.equal(claude?.policy.hideSubscriptionAuth, false);
+});
+
+test("turning the switch on launches claude with subscription authentication hidden", () => {
   const claude = runtimeOf("claude", policyWith());
 
   assert.deepEqual(claude?.launch.args, ["--hide-claude-auth"]);
@@ -98,7 +108,7 @@ test("the same adapter named absolutely is warned about, not denied", async () =
 
   const detail = identityDetail(runtime);
   assert.equal(detail.includes("no switch for it"), false, detail);
-  assert.match(detail, /left on|personal plan/i, "the risk is stated, not denied");
+  assert.match(detail, /login the CLI already has/i, "the risk is stated, not denied");
 });
 
 test("a runtime that never had the switch says so", async () => {
@@ -119,7 +129,7 @@ test("a launch the user replaced says plainly that the flag no longer applies", 
   // The catalog cannot know how somebody else's program is told to avoid
   // subscription credentials, and the approval must not leave that unsaid.
   assert.equal(runtime.launch.args.includes("--hide-claude-auth"), false);
-  assert.match(identityDetail(runtime), /left on|personal plan/i);
+  assert.match(identityDetail(runtime), /login the CLI already has/i);
 });
 
 test("an approved claude launch says the flag is there", async () => {

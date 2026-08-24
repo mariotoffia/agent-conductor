@@ -41,10 +41,10 @@ export interface RuntimeQuirks {
 export interface SessionPolicy {
   suppressBuiltInSubagents: boolean;
   /**
-   * Claude runs on an API key rather than somebody's claude.ai subscription
-   * (ADR-0010). Carried only by Runtimes the catalog has a recipe for, so a
-   * setting that names none of theirs does not lapse everyone else's trust —
-   * the policy is folded into the fingerprint whole.
+   * Makes Claude insist on an API key instead of the login the CLI already
+   * has; off by default (ADR-0013). Carried only by Runtimes the catalog has a
+   * recipe for, so a setting that names none of theirs does not lapse everyone
+   * else's trust — the policy is folded into the fingerprint whole.
    */
   hideSubscriptionAuth?: boolean;
 }

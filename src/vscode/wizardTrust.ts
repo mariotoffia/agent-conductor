@@ -81,7 +81,9 @@ export function identityDetail(runtime: ResolvedRuntime, plan?: SuppressionPlan)
  *
  * Said either way, and said even when the answer is "there is no switch": the
  * policy is part of the fingerprint, and a launch the user replaced silently
- * loses the flag the catalog would have added (ADR-0010).
+ * loses the flag the catalog would have added. On is the default (ADR-0013),
+ * so the line for it says what the launch runs on and where the switch is —
+ * which also covers a replaced launch, where the switch cannot be applied.
  */
 function authenticationLine(runtime: ResolvedRuntime): string {
   const recipe = runtime.subscriptionAuth?.hideArgs ?? [];
@@ -91,8 +93,8 @@ function authenticationLine(runtime: ResolvedRuntime): string {
   // one row above it, or the dialog argues with itself.
   return recipe.every((argument) => runtime.launch.args.includes(argument))
     ? `Subscription authentication: off, via ${recipe.join(" ")}.`
-    : "Subscription authentication: left on — this runtime may use a personal plan," +
-      " which a third-party product must not route through.";
+    : "Subscription authentication: on — runs on the login the CLI already has (ADR-0013)." +
+      " claude.hideSubscriptionAuth insists on an API key, for the catalog's own adapter only.";
 }
 
 /**

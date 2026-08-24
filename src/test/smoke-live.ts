@@ -137,7 +137,7 @@ export async function smokeLive(
 
 async function main(): Promise<void> {
   // The catalog under the same policy a default direct Session launches with.
-  const specs = builtinRuntimes({ suppressBuiltInSubagents: true, hideSubscriptionAuth: true });
+  const specs = builtinRuntimes({ suppressBuiltInSubagents: true });
   const result = await smokeLive(specs, {
     executable: executablePort(),
     log: (line) => console.log(line),
