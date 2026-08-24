@@ -1,26 +1,28 @@
 # Let agents call other agents
 
-**Not yet available — for any CLI.** Before an agent may hand work to another,
-Agent Conductor must verify that the CLI's own subagent feature is really
-switched off; the protocol these CLIs speak has no way to prove that yet, and
-unprovable means not allowed. So the setting exists, the machinery is built and
-tested, and no session is given the delegation tools today — whatever you turn
-on. `docs/CHANGELOG.md` in the repository records exactly what was verified,
-and this page describes what the feature does the day a CLI can pass that
-check.
+This is off until you turn it on.
 
-Once available: the agent you are talking to can hand a self-contained task to
-an agent on another CLI. Only a written brief crosses over — task text and file
-paths, never your conversation. The agent on the other end still reads files
-and runs commands itself, though, so work handed to a CLI on another provider
-sends whatever that agent then reads to that provider. That is why each target
-CLI, and its provider, needs your explicit approval first.
+Once on, the agent you are talking to can hand a self-contained task to an
+agent on another CLI — or the same CLI with a different model or effort. Only
+a written brief crosses over — task text and file paths, never your
+conversation. The agent on the other end still reads files and runs commands
+itself, though, so work handed to a CLI on another provider sends whatever
+that agent then reads to that provider. That is why each target CLI, and its
+provider, needs your explicit approval first.
 
 Every subagent is bounded by your own settings, whatever the CLI on the other
 end supports: how deep the tree may go, how many run at once, how many one
 session may start in all, and how long a subagent's turn may run. A money limit
 is passed on only to a CLI that says it can hold one — your limits apply either
 way.
+
+A CLI may also fork helpers of its own, inside its session, to split a task
+further. Those are the CLI's business: they run inside its session under the CLI's own
+permission mode — the CLI is built to ask you for them as it asks for itself,
+though that is the CLI's promise, not ours — and their cost is its cost, but
+they are not rows in the Sessions view and your limits do not count them. A CLI's settings entry can ask it to switch
+them off (`suppressBuiltInSubagents`), so that every delegation goes through
+Agent Conductor.
 
 Cancelling a session cancels every subagent below it. A worktree is never
 deleted for you: **Remove Worktree** on the row is the only thing that removes

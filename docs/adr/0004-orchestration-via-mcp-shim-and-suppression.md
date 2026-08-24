@@ -1,6 +1,6 @@
 # ADR-0004: Subagents go through an MCP server we inject, and each CLI's own version is switched off
 
-- Status: accepted
+- Status: accepted; switching off a CLI's own delegation before injecting the Shim is superseded by ADR-0014
 - Date: 2026-08-18
 
 ## Context

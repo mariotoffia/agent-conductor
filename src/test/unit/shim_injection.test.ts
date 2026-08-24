@@ -24,7 +24,7 @@ function eligible(
     depth: 0,
     maxSpawnDepth: 1,
     trusted: true,
-    suppressionVerified: true,
+    acceptsMcpServers: true,
     sessionKey: "parent-key",
     roots: ["/workspace"],
     issuer,
@@ -69,14 +69,16 @@ test("orchestration that is switched off injects no Shim and mints no capability
   assert.match(injection.refused ?? "", /orchestration/i);
 });
 
-test("a Runtime with no verified Suppression Capability gets no Shim", async (t) => {
+test("a Runtime whose agent accepts no MCP servers gets no Shim", async (t) => {
+  // Injected, such an agent would refuse `session/new` outright — a session
+  // that fails to open, not merely one without a Shim (ADR-0014).
   const { server, granted } = await issuer(t);
 
-  const injection = injectShim(eligible(server, { suppressionVerified: false }));
+  const injection = injectShim(eligible(server, { acceptsMcpServers: false }));
 
   assert.deepEqual(injection.servers, []);
   assert.deepEqual(granted, []);
-  assert.match(injection.refused ?? "", /suppress/i);
+  assert.match(injection.refused ?? "", /MCP servers/i);
 });
 
 test("a Runtime whose trust does not hold gets no Shim", async (t) => {

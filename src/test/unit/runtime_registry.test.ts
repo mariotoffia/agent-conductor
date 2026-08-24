@@ -440,4 +440,7 @@ test("DeepSeek Harness is catalogued as a preview: pinned ACP adapter, no suppre
   // `/model` must say there is nothing to choose — not "reconnect with the
   // value you want", which is what process-scoped config would make it say.
   assert.equal(dsh.quirks.processScopedConfig, false);
+  // Its ACP rejects a non-empty `mcpServers`: injected, the session would fail
+  // to open, so the catalog says never to inject it (ADR-0014).
+  assert.equal(dsh.quirks.refusesMcpServers, true);
 });

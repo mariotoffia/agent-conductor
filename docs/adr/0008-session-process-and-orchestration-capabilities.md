@@ -1,6 +1,6 @@
 # ADR-0008: One process per session, and what the Shim is allowed to do
 
-- Status: accepted
+- Status: accepted; the Suppression Capability precondition for injecting the Shim is superseded by ADR-0014
 - Date: 2026-08-18
 - Supersedes: the process-lifecycle and capability-scope parts of ADR-0004
 

@@ -445,10 +445,10 @@ function catalog(
   override?: { id: string; entry: RuntimeSetting },
 ): RuntimeSpec[] {
   return runtimeCatalog({
-    // Suppression is only ever needed to make Shim injection safe, so the window
-    // policy follows the orchestration switch (ADR-0004).
+    // A CLI's own subagents are allowed beside the Shim (ADR-0014), so the
+    // window asks for no suppression; a Runtime's own setting can still.
     policy: {
-      suppressBuiltInSubagents: settings["orchestration.enabled"],
+      suppressBuiltInSubagents: false,
       hideSubscriptionAuth: settings["claude.hideSubscriptionAuth"],
     },
     overrides: override ? { ...settings.runtimes, [override.id]: override.entry } : settings.runtimes,

@@ -1,7 +1,7 @@
 {
   "name": "agent-conductor",
   "displayName": "Agent Conductor",
-  "description": "Drive Claude Code, Codex, Gemini CLI, Copilot CLI — any ACP agent — inside VS Code. Pick CLI, model and reasoning effort per session, and see what the agent is actually running.",
+  "description": "Drive Claude Code, Codex, Gemini CLI, Copilot CLI — any ACP agent — inside VS Code. Pick CLI, model and reasoning effort per session, see what the agent is actually running, and let one agent hand work to agents on other CLIs within your limits.",
   "version": "0.0.1",
   "publisher": "mariotoffia",
   "license": "Apache-2.0",
@@ -212,8 +212,8 @@
           },
           {
             "id": "orchestrate",
-            "title": "Cross-CLI subagents",
-            "description": "Not yet available for any CLI — suppression cannot be verified over ACP today. The limits that will apply are yours to review.\n[Review orchestration settings](command:workbench.action.openSettings?%22agentConductor.orchestration%22)",
+            "title": "Enable cross-CLI subagents",
+            "description": "Off until you turn it on. Every subagent is bounded by limits you set.\n[Review orchestration settings](command:workbench.action.openSettings?%22agentConductor.orchestration%22)",
             "media": {
               "markdown": "walkthrough/orchestrate.md"
             }
@@ -318,7 +318,8 @@
               },
               "suppressBuiltInSubagents": {
                 "type": "boolean",
-                "default": true
+                "default": false,
+                "description": "Ask this CLI to switch off its own subagents, so that all delegation goes through the conductor. Off by default: a CLI may fork its own helpers inside its session. Part of the launch identity."
               },
               "safeMode": {
                 "type": "boolean",

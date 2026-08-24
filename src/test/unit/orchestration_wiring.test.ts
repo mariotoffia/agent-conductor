@@ -13,8 +13,9 @@ function settingsWith(values: Record<string, unknown>) {
 /** A Runtime that has cleared everything a Shim injection asks of it. */
 const ELIGIBLE = {
   trusted: true,
-  capabilities: { readback: true, suppression: true, budget: false },
-} satisfies Pick<ResolvedRuntime, "trusted" | "capabilities">;
+  capabilities: { readback: true, suppression: false, budget: false },
+  quirks: { processScopedConfig: false, effortReadback: true, slashCommandAllowlist: [] },
+} satisfies Pick<ResolvedRuntime, "trusted" | "capabilities" | "quirks">;
 
 function wiring(
   t: TestContext,
@@ -61,11 +62,11 @@ test("a window with orchestration switched off opens no socket at all", async (t
   );
 });
 
-test("a Runtime with no Suppression Capability opens no socket either", async (t) => {
+test("a Runtime whose agent accepts no MCP servers opens no socket either", async (t) => {
   const conductor = wiring(t, { "orchestration.enabled": true });
 
   const injection = await conductor.inject({
-    runtime: { trusted: true, capabilities: { readback: true, suppression: false, budget: false } },
+    runtime: { ...ELIGIBLE, quirks: { ...ELIGIBLE.quirks, refusesMcpServers: true } },
     sessionKey: "session-key",
     depth: 0,
     roots: ["/workspace"],

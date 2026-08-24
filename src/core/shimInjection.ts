@@ -8,11 +8,10 @@
  * in its `mcpServers` at all, so the Agent below it has no way to ask.
  *
  * Every condition fails closed, and each one alone is enough to refuse: a
- * Runtime whose trust no longer holds, one whose Suppression Plan has not been
- * shown to work here, orchestration switched off, or a Session already at the
- * cap. That ordering matters more than it looks — injecting the Shim beside a
- * CLI's own working `spawn_agent` is delegation that never passes our policy,
- * which is the whole thing the Suppression Capability exists to prevent.
+ * Runtime whose trust no longer holds, orchestration switched off, an agent
+ * that refuses MCP servers, or a Session already at the cap. A CLI's own
+ * subagents beside the Shim are allowed (ADR-0014): they live inside the same
+ * session, so its permission prompts and cost account for them.
  */
 import { isAbsolute } from "node:path";
 import type * as acp from "@agentclientprotocol/sdk";
@@ -75,8 +74,9 @@ export interface ShimConditions {
   maxSpawnDepth: number;
   /** Runtime Trust holds, re-derived for the identity about to be launched. */
   trusted: boolean;
-  /** A current Suppression Capability for that exact identity, in this workspace. */
-  suppressionVerified: boolean;
+  /** The agent takes MCP servers at all; one that rejects `mcpServers` would
+   *  fail to open the session rather than merely lack the Shim (ADR-0014). */
+  acceptsMcpServers: boolean;
   /** Absolute interpreter the Shim would be started with. */
   command: string;
 }
@@ -90,7 +90,7 @@ export interface ShimConditions {
 export function shimRefusal(conditions: ShimConditions): string | undefined {
   if (!conditions.enabled) return "orchestration is switched off";
   if (!conditions.trusted) return "this runtime's trust does not hold";
-  if (!conditions.suppressionVerified) return "this runtime has no current suppression capability";
+  if (!conditions.acceptsMcpServers) return "this runtime's agent accepts no MCP servers";
   // `>=`, not `>`: a Session at the cap would spawn children beyond it.
   if (conditions.depth >= conditions.maxSpawnDepth) {
     return `this session is at the spawn depth cap (${conditions.maxSpawnDepth})`;

@@ -38,25 +38,28 @@ ADR-0011), stable VS Code APIs only.
   output is redacted before it reaches a log, a message or the transcript
   (ADR-0010).
 
-### Designed, tested, and deliberately unreachable
+### Cross-CLI subagents
 
-Cross-CLI subagents — the Orchestrator, the injected MCP Shim, per-Session
-capabilities, worktree isolation and the cancellation cascade — are implemented
-and hold under unit and extension-host tests, where a test-only hook supplies
-the one piece of evidence the real protocol cannot: the agent's live tool list.
+Turn `agentConductor.orchestration.enabled` on and every trusted Runtime whose
+agent accepts MCP servers is given the Shim: its agent can hand a Brief to a
+Subagent on any CLI, model and effort, bounded by depth, concurrency, aggregate
+count and timeout, in a worktree or the parent's folder, cancelled with its
+parent. Handing work to a CLI on another provider needs Fan-out Consent, given
+in the wizard.
 
-ACP has no method that reports an agent's tools (verified below), so a
-Suppression Plan cannot be verified against any real CLI, no Runtime can hold a
-Suppression Capability, and the Shim is injected for nobody. Turning
-`agentConductor.orchestration.enabled` on changes none of that today. This is
-the fail-closed direction, chosen in ADR-0008; direct sessions are the product
-until the protocol can carry the evidence.
+A CLI's own subagents are allowed beside the Shim (ADR-0014). ACP has no
+method that reports an agent's tools (verified below), so whether a
+Suppression Plan worked can never be proved; rather than keep the feature
+unreachable, the decision is that a CLI may fork its own helpers inside its
+session — under the CLI's own permission mode, its cost, and outside the
+limits, which bound what goes through the Shim. `suppressBuiltInSubagents` on a Runtime
+still asks its CLI to switch them off, as optional hardening.
 
 ### Verification record — 2026-08-24
 
 | Claim this product relies on | Verdict | Primary source |
 |---|---|---|
-| ACP defines no method or notification that reports an agent's tool list — why suppression stays unverifiable and fan-out stays off (ADR-0008) | Verified | [agentclientprotocol.com/protocol/schema](https://agentclientprotocol.com/protocol/schema) |
+| ACP defines no method or notification that reports an agent's tool list — why a Suppression Plan can never be proved to have worked, and why ADR-0014 allows a CLI's own subagents instead of waiting for proof | Verified | [agentclientprotocol.com/protocol/schema](https://agentclientprotocol.com/protocol/schema) |
 | `session/load`, `session/set_config_option`, `session/request_permission`, `fs/*`, `terminal/*` exist as this client uses them | Verified | [agentclientprotocol.com/protocol/schema](https://agentclientprotocol.com/protocol/schema) |
 | `@agentclientprotocol/claude-agent-acp@0.70.0` exists, is `latest`, and its `bin` is `claude-agent-acp` — the command the catalog launches | Verified | [registry.npmjs.org](https://registry.npmjs.org/@agentclientprotocol/claude-agent-acp/0.70.0) |
 | `@agentclientprotocol/codex-acp@1.4.0` exists with `bin` `codex-acp`; the ACP Registry currently publishes 1.6.2, which resolution may move forward to | Verified | [registry.npmjs.org](https://registry.npmjs.org/@agentclientprotocol/codex-acp/1.4.0) |
@@ -86,8 +89,7 @@ each recipe disables — have no primary source that lists them:
   one, so the catalog's `dsh` entry carries no Suppression Plan at all rather
   than an invented recipe — which keeps it ineligible for the Shim outright.
 
-Nothing rests on them: a plan counts only when a live tool list proves the
-named tools gone, no such list can be obtained (see above), so every one of
-these recipes is currently refused rather than trusted. Verify them the day
-the protocol can carry the evidence, before granting the first Suppression
-Capability.
+Nothing gates on them: a recipe is applied only where a Runtime's
+`suppressBuiltInSubagents` asks for it, as hardening whose effect cannot be
+proved (see above), and the Shim is injected regardless (ADR-0014). Verify
+them before relying on that hardening for anything.

@@ -36,6 +36,10 @@ export interface RuntimeQuirks {
   effortReadback: boolean;
   /** Agent slash commands safe to surface (interactive TUI commands hang ACP). */
   slashCommandAllowlist: string[];
+  /** An ACP that rejects a non-empty `mcpServers`: never injected, whatever
+   *  else holds, since a session that fails to open is worse than one without
+   *  a Shim (ADR-0014). */
+  refusesMcpServers?: boolean;
 }
 
 export interface SessionPolicy {

@@ -68,7 +68,7 @@ export interface OrchestrationOptions {
 
 export interface InjectionRequest {
   /** The identity this Session is actually about to launch under. */
-  runtime: Pick<ResolvedRuntime, "trusted" | "capabilities">;
+  runtime: Pick<ResolvedRuntime, "trusted" | "capabilities" | "quirks">;
   sessionKey: string;
   parentSessionKey?: string;
   depth: number;
@@ -144,7 +144,7 @@ export function orchestration(options: OrchestrationOptions): Orchestration {
         depth: request.depth,
         maxSpawnDepth: settings["orchestration.maxSpawnDepth"],
         trusted: request.runtime.trusted,
-        suppressionVerified: request.runtime.capabilities.suppression,
+        acceptsMcpServers: request.runtime.quirks.refusesMcpServers !== true,
         command: options.command,
       };
       // Asked before the socket exists, so that a window with orchestration off

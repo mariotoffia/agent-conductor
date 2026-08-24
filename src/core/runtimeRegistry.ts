@@ -87,15 +87,13 @@ function baseRuntimes(): BaseRuntime[] {
       // launch is dsh's own launcher booting a profile that holds DeepSeek's
       // ACP plugin (walkthrough/install.md has the two commands that make the
       // profile). Not in the ACP Registry, so the pin moves by catalog change.
-      // No suppression recipe is documented, so dsh carries no plan and cannot
-      // host the Shim (ADR-0008) — and its ACP refuses `mcpServers` anyway.
+      // Its ACP rejects `mcpServers`, so it is never injected (ADR-0014), and
+      // no launch flag sets its model, so `/model` says there is nothing to pick.
       displayName: "DeepSeek Harness (preview)",
       launch: { command: "dsh", args: ["--profile", "acp"], env: {} },
       adapter: { package: "@deepseek-ai/dsh", version: "0.1.1-rc.2", bin: "dsh" },
       loginCommand: "dsh web",
-      // Not process-scoped: there is no launch flag this Client could vary to
-      // change the model at all — it is dsh's own setting, so `/model` says so.
-      quirks: { processScopedConfig: false, effortReadback: false, slashCommandAllowlist: [] },
+      quirks: { processScopedConfig: false, effortReadback: false, slashCommandAllowlist: [], refusesMcpServers: true },
     },
   ];
 }
