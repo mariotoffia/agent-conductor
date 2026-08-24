@@ -18,6 +18,15 @@ import net from "node:net";
  */
 export const MAX_FRAME_BYTES = 1_000_000;
 
+/**
+ * The variable the Session Capability arrives in.
+ *
+ * A copy for the same reason as the limit above: argv is world-readable, so the
+ * secret travels in the environment, and the two ends have to agree on the name
+ * without one of them being able to import it from the other.
+ */
+export const SECRET_VARIABLE = "AGENT_CONDUCTOR_SESSION_SECRET";
+
 export interface OrchestratorLink {
   /** Sends one call and waits for its answer. Rejects with what went wrong. */
   call(method: string, params: Record<string, unknown>): Promise<unknown>;

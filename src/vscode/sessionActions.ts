@@ -4,6 +4,7 @@ import {
   readSessions,
   resumeBlock,
   startupResume,
+  type ReleaseOutcome,
   type ResumeConditions,
   type StoragePort,
 } from "../core/index.js";
@@ -33,6 +34,9 @@ export interface SessionActionHost {
   inform(text: string): void;
   /** `vscode.window.showErrorMessage`. */
   fail(text: string): void;
+  /** A modal question with one destructive answer; `false` is every other way
+   *  out of it, including dismissing it. */
+  confirm(text: string, proceed: string): Promise<boolean>;
 }
 
 export interface SessionActionOptions {
@@ -46,12 +50,15 @@ export interface SessionActionOptions {
   conditions(): ResumeConditions;
   /** `agentConductor.sessions.resumeOnStartup`, read when it is acted on. */
   resumeOnStartup(): boolean;
+  /** Gives a worktree back. Absent in a window that has no orchestration. */
+  releaseWorktree?(path: string, options?: { force?: boolean }): Promise<ReleaseOutcome>;
 }
 
 export interface SessionActions {
   cancel(node?: SessionNode): Promise<void>;
   resume(node?: SessionNode): Promise<void>;
   openWorktreeDiff(node?: SessionNode): Promise<void>;
+  removeWorktree(node?: SessionNode): Promise<void>;
   resumeOnStartup(): Promise<void>;
   /** Ends the live Session so the next prompt opens a new one. */
   newSession(): Promise<void>;
@@ -76,6 +83,7 @@ export function sessionCommands(actions: SessionActions): Record<string, (node?:
     "agentConductor.cancelSession": (node) => actions.cancel(node),
     "agentConductor.resumeSession": (node) => actions.resume(node),
     "agentConductor.openWorktreeDiff": (node) => actions.openWorktreeDiff(node),
+    "agentConductor.removeWorktree": (node) => actions.removeWorktree(node),
   };
 }
 
@@ -183,6 +191,73 @@ export function sessionActions(options: SessionActionOptions): SessionActions {
             ` ${said(error)}`,
         );
       }
+    },
+
+    /**
+     * Gives a worktree back, and only when somebody asked for it.
+     *
+     * A checkout with uncommitted changes is refused once and removed only if
+     * the user says so again, having been told what is in it. Nothing in this
+     * Client removes a worktree on its own — a Session that crashed is exactly
+     * when unmerged work is most likely to be sitting there (ADR-0009).
+     */
+    async removeWorktree(node) {
+      const worktree = node?.worktree;
+      if (!worktree) return;
+      // A running Session is working *in* that directory. Removing it deletes
+      // the working directory of a process that is mid-turn, and everything it
+      // does after that is lost — so the row offers it only once the Session has
+      // ended. The manifest says the same, and this says it again because a
+      // command is invocable without a row (ADR-0009).
+      //
+      // "Running" means anywhere, not here: Sessions are remembered per machine
+      // and every window's worktrees live under one root, so a window that is
+      // not running this Session can still see its row and reach its checkout.
+      // Refusing is the only answer available for that one — this window cannot
+      // cancel another window's Session, so there is no "cancel it first" to
+      // offer.
+      if (node?.live || node?.blocked === "held-elsewhere") {
+        host.fail(
+          node?.live
+            ? "That session is still running in this worktree. Cancel it first, then remove the worktree."
+            : "Another window still has that session open, and its agent is working in this worktree.",
+        );
+        return;
+      }
+      const release = options.releaseWorktree;
+      if (!release) {
+        host.fail("This window has no orchestration, so it owns no worktrees to remove.");
+        return;
+      }
+      if (!isAbsolute(worktree.path)) {
+        host.fail("That session's worktree is not an absolute path, so it was not removed.");
+        return;
+      }
+      const shown = clampForDisplay(plainText(worktree.path), MAX_DETAIL_CHARS);
+      if (!(await host.confirm(`Remove the worktree at ${shown}?`, "Remove"))) return;
+      const first = await release(worktree.path);
+      if (first.removed) {
+        host.inform(`Removed the worktree at ${shown}. Its branch was left alone.`);
+        return;
+      }
+      const why = clampForDisplay(plainText(first.reason ?? "it could not be removed"), MAX_DETAIL_CHARS);
+      // Only uncommitted changes are a refusal that asking again could
+      // reasonably overturn, and only because the user can be told exactly what
+      // they are giving up. A checkout nobody could inspect is not that: nothing
+      // established there was work there, so "remove it anyway, losing those
+      // changes" would be a sentence about changes nobody has seen. The others
+      // force would not fix at all.
+      if (first.cause !== "dirty") {
+        host.fail(`${why} The worktree at ${shown} was kept.`);
+        return;
+      }
+      if (!(await host.confirm(`${why} Remove it anyway, losing those changes?`, "Remove anyway"))) {
+        host.inform(`The worktree at ${shown} was kept.`);
+        return;
+      }
+      const forced = await release(worktree.path, { force: true });
+      if (forced.removed) host.inform(`Removed the worktree at ${shown}.`);
+      else host.fail(clampForDisplay(plainText(forced.reason ?? "it could not be removed"), MAX_DETAIL_CHARS));
     },
   };
 }

@@ -32,12 +32,24 @@ export const ICONS: Record<"running" | "waiting" | "broken" | "ended", string> =
 export const LIVE_CONTEXT = "agentConductor.session.live";
 export const RESUMABLE_CONTEXT = "agentConductor.session.resumable";
 export const PAST_CONTEXT = "agentConductor.session.past";
+/**
+ * Appended when another window says it still has this Session open.
+ *
+ * Its own mark rather than a shade of `past`, because what it stops is
+ * different: a Session this window merely cannot resume is still one whose
+ * leftovers it may clear up, and a Session somebody else is *running* is not.
+ * Sessions are remembered per machine and worktrees live under one root, so
+ * "not live here" is not the same as "not live".
+ */
+export const HELD_MARK = ".held";
+
 /** Appended to any of the above when the Session has a worktree of its own. */
 export const WORKTREE_MARK = ".worktree";
 
 export function contextValue(node: SessionNode): string {
   const base = node.live ? LIVE_CONTEXT : node.blocked ? PAST_CONTEXT : RESUMABLE_CONTEXT;
-  return node.worktree ? `${base}${WORKTREE_MARK}` : base;
+  const held = node.blocked === "held-elsewhere" ? HELD_MARK : "";
+  return `${base}${held}${node.worktree ? WORKTREE_MARK : ""}`;
 }
 
 export function iconFor(state: SessionState): keyof typeof ICONS {

@@ -68,8 +68,22 @@ export const rowNode = (over: Partial<SessionNode> = {}): SessionNode => ({
 });
 
 /** The row actions, with every window surface and the participant recorded. */
-export function actionHarness(over: { workspaces?: string[]; conditions?: () => ResumeConditions } = {}) {
+export function actionHarness(
+  over: {
+    workspaces?: string[];
+    conditions?: () => ResumeConditions;
+    /** Answers to the confirmations this harness will be asked, in order. An
+     *  unanswered question is `false`, which is what dismissing one means. */
+    confirmations?: boolean[];
+    releaseWorktree?(path: string, options?: { force?: boolean }): Promise<{
+      removed: boolean;
+      reason?: string;
+    }>;
+  } = {},
+) {
   const resumed: unknown[] = [];
+  const asked: string[] = [];
+  const confirmations = [...(over.confirmations ?? [])];
   const cancelled: (string | undefined)[] = [];
   let disposals = 0;
   const executed: unknown[][] = [];
@@ -96,14 +110,20 @@ export function actionHarness(over: { workspaces?: string[]; conditions?: () => 
       },
       inform: (text) => said.push(text),
       fail: (text) => said.push(text),
+      confirm: async (text) => {
+        asked.push(text);
+        return confirmations.shift() ?? false;
+      },
     },
     workspaces: () => over.workspaces ?? ["/repo"],
     storage: held([]),
     conditions: over.conditions ?? conditions,
     resumeOnStartup: () => false,
+    ...(over.releaseWorktree ? { releaseWorktree: over.releaseWorktree } : {}),
   });
   return {
     actions,
+    asked,
     resumed,
     cancelled,
     disposals: () => disposals,
@@ -116,6 +136,10 @@ export function actionHarness(over: { workspaces?: string[]; conditions?: () => 
       execute: async (command: string, ...args: unknown[]) => {
         executed.push([command, ...args]);
         return undefined;
+      },
+      confirm: async (text: string) => {
+        asked.push(text);
+        return confirmations.shift() ?? false;
       },
       inform: (text: string) => said.push(text),
       fail: (text: string) => said.push(text),

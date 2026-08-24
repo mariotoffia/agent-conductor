@@ -4,10 +4,12 @@ import {
   resolveRuntime,
   trustedLaunch,
   type ExecutablePort,
+  type ResolvedRuntime,
   type RuntimeSpec,
   type RuntimeTrust,
   type SessionPorts,
   type SessionSpec,
+  type ShimInjection,
 } from "../core/index.js";
 
 /**
@@ -40,6 +42,14 @@ export interface TrustedSessionRequest {
   secretEnvironment?: () => Promise<Record<string, string>>;
   requestedModel?: string;
   requestedEffort?: string;
+  /**
+   * Decides the Shim for the identity that actually resolved (ADR-0004).
+   *
+   * A function taking the resolved Runtime, because eligibility rests on what
+   * this launch turns out to be — its trust and its Suppression Capability —
+   * and that is only known here, after both gates and before the process starts.
+   */
+  orchestrate?: (runtime: ResolvedRuntime) => Promise<ShimInjection>;
   onUpdate: (notification: acp.SessionNotification) => void;
   ports: SessionPorts;
 }
@@ -96,6 +106,9 @@ export function sessionFolders(
  */
 export interface TrustedSession {
   session: ConductorSession;
+  /** Withdraws the Shim's authority. Call it when the Session ends: a capability
+   *  outliving its Session is authority nothing can take back (ADR-0008). */
+  revokeOrchestration: () => void;
   /** The credential values this Session's Agent was started with, handed back
    *  rather than captured by the caller: they are what everything the Agent
    *  words is redacted against, on a row and in a record alike, and a caller
@@ -119,6 +132,8 @@ export async function openTrustedSession(request: TrustedSessionRequest): Promis
   // throws for an identity the user has not approved.
   const launch = trustedLaunch(runtime);
   const secretEnvironment = await request.secretEnvironment?.();
+  // After both gates, so nothing is minted for a launch that was refused.
+  const injection = await request.orchestrate?.(runtime);
   const spec: SessionSpec = {
     runtimeId: runtime.id,
     launch,
@@ -132,12 +147,25 @@ export async function openTrustedSession(request: TrustedSessionRequest): Promis
     ...(secretEnvironment ? { secretEnvironment } : {}),
     ...(request.requestedModel ? { requestedModel: request.requestedModel } : {}),
     ...(request.requestedEffort ? { requestedEffort: request.requestedEffort } : {}),
+    ...(injection?.servers.length ? { mcpServers: injection.servers } : {}),
     onUpdate: request.onUpdate,
   };
-  // Both go through this one gate: reattaching starts an Agent process exactly
-  // as creating a Session does, so it is trusted on exactly the same terms.
-  const session = await (request.loadSessionId === undefined
-    ? ConductorSession.open(spec, request.ports)
-    : ConductorSession.load({ ...spec, sessionId: request.loadSessionId }, request.ports));
-  return { session, secrets: Object.values(secretEnvironment ?? {}) };
+  try {
+    // Both go through this one gate: reattaching starts an Agent process exactly
+    // as creating a Session does, so it is trusted on exactly the same terms.
+    const session = await (request.loadSessionId === undefined
+      ? ConductorSession.open(spec, request.ports)
+      : ConductorSession.load({ ...spec, sessionId: request.loadSessionId }, request.ports));
+    return {
+      session,
+      secrets: Object.values(secretEnvironment ?? {}),
+      revokeOrchestration: () => injection?.revoke(),
+    };
+  } catch (error) {
+    // A Session that never started still had authority minted for it, and there
+    // is now nothing that will ever end it — the capability would sit in the
+    // table for the life of the window, compared against every handshake.
+    injection?.revoke();
+    throw error;
+  }
 }

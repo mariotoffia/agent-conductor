@@ -12,7 +12,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
-import { connectOrchestrator, type OrchestratorLink } from "./socketClient.js";
+import { connectOrchestrator, SECRET_VARIABLE, type OrchestratorLink } from "./socketClient.js";
 
 function arg(name: string): string | undefined {
   const i = process.argv.indexOf(`--${name}`);
@@ -23,7 +23,7 @@ const socketPath = arg("socket");
 // The capability comes from the environment, never from argv: process arguments
 // are readable by any local process — `/proc/<pid>/cmdline` on Linux, `ps` on
 // macOS — and a secret anyone can read authenticates anyone.
-const secret = process.env.AGENT_CONDUCTOR_SESSION_SECRET;
+const secret = process.env[SECRET_VARIABLE];
 
 let link: OrchestratorLink | undefined;
 

@@ -195,7 +195,10 @@ test("a row for a session somebody else has open says so, and refuses the click"
 
   const [row] = await tree.getChildren();
   assert.equal(row.blocked, "held-elsewhere");
-  assert.equal(tree.getTreeItem(row).contextValue, "agentConductor.session.past");
+  // Marked as held, not merely as past: a Session this window cannot resume is
+  // still one whose leftovers it may clear up, and a Session another window is
+  // *running* is not — and the two are told apart nowhere else.
+  assert.equal(tree.getTreeItem(row).contextValue, "agentConductor.session.past.held");
   assert.match(String(tree.getTreeItem(row).tooltip), /another window still has it open/);
 
   await harness.actions.resume(row);

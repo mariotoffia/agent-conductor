@@ -200,20 +200,6 @@ test("an agent that died mid-turn is not remembered as still taking one", async 
   assert.equal(saved.state, "failed");
 });
 
-/**
- * Fields a record has room for and nothing yet fills in, with the reason.
- *
- * A field with no writer is a surface that draws nothing — the Sessions tree
- * nests Subagents under their parent and offers a worktree's changes, and both
- * are unreachable while these stay empty. Named here so that gaining a writer
- * has to be a deliberate change to this list, and so the docs that describe
- * those surfaces can be corrected in the same breath.
- */
-const NO_WRITER_YET: Record<string, string> = {
-  parentSessionId: "nothing spawns a Subagent yet",
-  worktree: "nothing creates a worktree yet",
-};
-
 /** Every `.ts` file beneath a directory, as `[name, text]`. */
 async function sources(root: URL): Promise<(readonly [string, string])[]> {
   const entries = await readdir(root, { withFileTypes: true });
@@ -227,28 +213,50 @@ async function sources(root: URL): Promise<(readonly [string, string])[]> {
   return found.flat();
 }
 
-test("a record field nothing fills in is one this client admits to", async () => {
+test("one place writes a record, and every field it has room for is filled there", async () => {
   // Every source file under the two layers, at any depth: a writer put in a
-  // subdirectory is exactly the one this list would otherwise miss.
+  // subdirectory is exactly the one this check would otherwise miss.
   const files = await sources(new URL("../../", import.meta.url));
 
   // One writer, found rather than assumed: a second would be a second place for
-  // this list to be wrong.
+  // a field to be filled in differently, or not at all.
   const writers = files
     .filter(([name, text]) => name !== "sessionStore.ts" && text.includes("saveSession("))
     .map(([name]) => name);
   assert.deepEqual(writers, ["sessionRecords.ts"]);
 
   const written = files.find(([name]) => name === "sessionRecords.ts")?.[1] ?? "";
-  const filled = Object.keys(NO_WRITER_YET).filter((field) => written.includes(`${field}:`));
-  assert.deepEqual(filled, [], `${filled.join(", ")} gained a writer without this list being updated`);
+  // The two the Sessions tree draws its hierarchy and its worktree row from.
+  // Unfilled, both surfaces exist and show nothing, which reads as an
+  // Orchestrator that ran and recorded nothing rather than as one that did not.
+  for (const field of ["parentSessionId", "worktree"]) {
+    assert.equal(written.includes(`${field}:`), true, `nothing writes ${field}`);
+  }
+});
 
-  // And the live half of a row, which does not go through a record at all.
-  // Matched against the whole file rather than one call's inline literal: an
-  // object hoisted to a variable would slip past a pattern anchored on `track(`,
-  // and this list would go on claiming a field nothing fills in.
-  const composition = files.find(([name]) => name === "composition.ts")?.[1] ?? "";
-  assert.doesNotMatch(composition, /worktree/);
+test("a Subagent is recorded under its parent, with the checkout it worked in", async (t) => {
+  const home = await directory(t);
+  const storage = fileStorage(home);
+  let died = (): void => undefined;
+  const exited = new Promise<AgentExit>((settle) => {
+    died = () => settle({ code: 0, signal: null });
+  });
+
+  remember(live({ exited }), storage, logged().port, {
+    runtimeId: "claude",
+    fingerprint: "fp",
+    workspace: "/worktrees/child",
+    secrets: [],
+    window: "this-window",
+    parentSessionId: "parent-acp",
+    worktree: { path: "/worktrees/child", branch: "agent-conductor/child" },
+  });
+  died();
+  await written(storage);
+
+  const [saved] = await readSessions(storage);
+  assert.equal(saved.parentSessionId, "parent-acp");
+  assert.deepEqual(saved.worktree, { path: "/worktrees/child", branch: "agent-conductor/child" });
 });
 
 test("a turn somebody stopped is not remembered as one that broke", async (t) => {

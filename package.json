@@ -89,6 +89,11 @@
         "command": "agentConductor.openWorktreeDiff",
         "title": "Agent Conductor: Open Worktree Changes",
         "icon": "$(git-compare)"
+      },
+      {
+        "command": "agentConductor.removeWorktree",
+        "title": "Agent Conductor: Remove Worktree",
+        "icon": "$(trash)"
       }
     ],
     "viewsContainers": {
@@ -137,6 +142,11 @@
           "command": "agentConductor.openWorktreeDiff",
           "when": "view == agentConductor.sessions && viewItem =~ /\\.worktree$/",
           "group": "inline"
+        },
+        {
+          "command": "agentConductor.removeWorktree",
+          "when": "view == agentConductor.sessions && viewItem =~ /^agentConductor\\.session\\.(resumable|past)\\.worktree$/",
+          "group": "inline"
         }
       ],
       "commandPalette": [
@@ -150,6 +160,10 @@
         },
         {
           "command": "agentConductor.openWorktreeDiff",
+          "when": "false"
+        },
+        {
+          "command": "agentConductor.removeWorktree",
           "when": "false"
         }
       ]
@@ -354,6 +368,21 @@
           "scope": "machine",
           "default": 1,
           "description": "Depth below which the orchestrator MCP server is not injected (recursion guard)."
+        },
+        "agentConductor.orchestration.maxSubagentsPerSession": {
+          "type": "number",
+          "scope": "machine",
+          "default": 20,
+          "minimum": 1,
+          "maximum": 200,
+          "description": "Subagents one session may start over its whole life, however many run at once."
+        },
+        "agentConductor.orchestration.subagentTimeoutMs": {
+          "type": "number",
+          "scope": "machine",
+          "default": 900000,
+          "minimum": 1000,
+          "description": "How long a subagent's turn may run. A subagent may ask for less, never for more."
         },
         "agentConductor.orchestration.subagentIsolation": {
           "scope": "machine",

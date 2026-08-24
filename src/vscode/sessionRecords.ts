@@ -62,6 +62,10 @@ export function remember(
     secrets: string[];
     /** This window's id, written beside the hold below. */
     window: string;
+    /** The Session that spawned this one, when it is a Subagent (ADR-0009). */
+    parentSessionId?: string;
+    /** The checkout this Session works in, when it has one of its own. */
+    worktree?: { path: string; branch: string };
     /** Drives the heartbeat below; the system clock when nothing supplies one. */
     clock?: ClockPort;
   },
@@ -91,6 +95,10 @@ export function remember(
           // — take the id and nothing secret, so the id is the handle. This
           // Client sends the first and only the first, so that is the gate.
           loadable: session.handshake.agentCapabilities?.loadSession === true,
+          // What the Subagent tree is drawn from, and what its worktree row
+          // offers. Nobody wrote either until the Orchestrator did (ADR-0009).
+          ...(about.parentSessionId ? { parentSessionId: about.parentSessionId } : {}),
+          ...(about.worktree ? { worktree: about.worktree } : {}),
           model: session.modelSelection,
           effort: session.effortSelection,
         },

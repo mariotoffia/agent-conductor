@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { basename } from "node:path";
+import type * as acp from "@agentclientprotocol/sdk";
 import * as vscode from "vscode";
 import {
   executablePort,
@@ -10,6 +11,8 @@ import {
   resolveRuntime,
   runtimeCatalog,
   savesSettled,
+  type ChildLaunch,
+  type ConductorSession,
   type RegistrySnapshot,
   type ResumeConditions,
   type RuntimeSpec,
@@ -27,6 +30,8 @@ import { formHost, modalConsentHost, openDocuments } from "./hostPorts.js";
 import { DiffDocuments, DIFF_SCHEME } from "./diffDocs.js";
 import { OPEN_DIFF_COMMAND } from "./chatSink.js";
 import { ConductorParticipant, type RuntimeChoice } from "./participant.js";
+import type { SavedSession } from "./participantPorts.js";
+import { defaultWorktreeRoot, orchestration } from "./orchestration.js";
 import { fileRoots } from "./spawnGate.js";
 import type { ConsentHost } from "./permissions.js";
 import { launchSession } from "./sessionLaunch.js";
@@ -176,6 +181,86 @@ export function activateConductor(context: vscode.ExtensionContext): ConductorAc
     }),
   );
 
+  /**
+   * Orchestration: the socket, the spawn tree and the worktrees (ADR-0008).
+   *
+   * Built for every window, and inert in almost all of them: no socket is
+   * created and no capability is minted until a Session turns out to be eligible
+   * for the Shim, which needs orchestration switched on *and* a Suppression
+   * Capability no Runtime holds today. The wiring exists so that granting one is
+   * the only remaining step, rather than a second implementation.
+   */
+  const conductor = orchestration({
+    settings,
+    runtimes: () => runtimes(),
+    trustFor: (spec) => trustFor(context, spec),
+    executable: executablePort(),
+    workspace: () => workspaceRoots()[0],
+    openChild: (child: ChildLaunch) => startSession(child.runtimeId, () => undefined, undefined, child),
+    storage,
+    log,
+    // The extension host's own Node, and the Shim as the build wrote it: both
+    // absolute, because ACP requires it and because a bare name would be
+    // resolved from wherever the Agent happens to be running.
+    command: process.execPath,
+    shim: { args: [vscode.Uri.joinPath(context.extensionUri, "dist", "mcp-shim.cjs").fsPath] },
+    worktreeRoot: defaultWorktreeRoot(context.globalStorageUri.fsPath),
+  });
+  context.subscriptions.push({ dispose: () => void conductor.dispose() });
+
+  /** The one call that starts a Session in this window, direct or Subagent. */
+  const startSession = (
+    runtimeId: string,
+    onUpdate: (notification: acp.SessionNotification) => void,
+    load?: SavedSession,
+    child?: ChildLaunch,
+  ): Promise<ConductorSession> =>
+    launchSession({
+      runtimeId,
+      ...(load ? { load } : {}),
+      onUpdate,
+      runtimes: () => runtimes(),
+      settings,
+      roots: workspaceRoots,
+      workspaceTrusted: () => vscode.workspace.isTrusted,
+      trustFor: (spec) => trustFor(context, spec),
+      secretsFor: (spec, references) =>
+        resolveSecretEnvironment(context.secrets, spec.id, references),
+      executable: executablePort(),
+      ports: (current, roots, agentLabel) =>
+        sessionPorts({
+          settings: current,
+          roots,
+          agentLabel,
+          log,
+          consent: askConsent(),
+          documents: openDocuments(),
+          forms: formHost(),
+        }),
+      storage,
+      log,
+      sessions,
+      window: windowId,
+      orchestration: conductor,
+      ...(child
+        ? {
+            child: {
+              sessionKey: child.sessionKey,
+              parentSessionKey: child.parentSessionKey,
+              parentSessionId: child.parentSessionId,
+              depth: child.depth,
+              cwd: child.cwd,
+              ...(child.requestedModel ? { requestedModel: child.requestedModel } : {}),
+              ...(child.requestedEffort ? { requestedEffort: child.requestedEffort } : {}),
+              ...(child.worktree ? { worktree: child.worktree } : {}),
+              // A Subagent has no chat stream of its own, so the Orchestrator is
+              // where its Updates go: its parent's result is made of them.
+              observe: child.observe,
+            },
+          }
+        : {}),
+    });
+
   const participant = new ConductorParticipant({
     diffs,
     log,
@@ -188,34 +273,7 @@ export function activateConductor(context: vscode.ExtensionContext): ConductorAc
       runtimes().find((spec) => spec.id === runtimeId)?.modelCatalog ?? [],
     runtimeQuirks: (runtimeId) => runtimes().find((spec) => spec.id === runtimeId)?.quirks,
     onChanged: () => sessions.refresh(),
-    open: (runtimeId, onUpdate, load) =>
-      launchSession({
-        runtimeId,
-        ...(load ? { load } : {}),
-        onUpdate,
-        runtimes: () => runtimes(),
-        settings,
-        roots: workspaceRoots,
-        workspaceTrusted: () => vscode.workspace.isTrusted,
-        trustFor: (spec) => trustFor(context, spec),
-        secretsFor: (spec, references) =>
-          resolveSecretEnvironment(context.secrets, spec.id, references),
-        executable: executablePort(),
-        ports: (current, roots, agentLabel) =>
-          sessionPorts({
-            settings: current,
-            roots,
-            agentLabel,
-            log,
-            consent: askConsent(),
-            documents: openDocuments(),
-            forms: formHost(),
-          }),
-        storage,
-        log,
-        sessions,
-        window: windowId,
-      }),
+    open: (runtimeId, onUpdate, load) => startSession(runtimeId, onUpdate, load),
   });
   // `stop`, not `dispose`: this teardown is the final one, and a turn waiting
   // on a dead Session must not resume behind it.
@@ -243,7 +301,12 @@ export function activateConductor(context: vscode.ExtensionContext): ConductorAc
       // asked for it rather than only in a log nobody has open.
       inform: (text) => void vscode.window.showInformationMessage(text),
       fail: (text) => void vscode.window.showErrorMessage(text),
+      // Modal, because the one thing it is asked about destroys work. Anything
+      // but the destructive answer — including dismissing it — is `false`.
+      confirm: async (text, proceed) =>
+        (await vscode.window.showWarningMessage(text, { modal: true }, proceed)) === proceed,
     },
+    releaseWorktree: (path, release) => conductor.releaseWorktree(path, release),
   });
   context.subscriptions.push(
     vscode.commands.registerCommand(OPEN_DIFF_COMMAND, (id: unknown) => openDiff(diffs, id)),
@@ -283,11 +346,20 @@ export function activateConductor(context: vscode.ExtensionContext): ConductorAc
   void actions.resumeOnStartup().catch((error: unknown) => {
     log.log("error", `no session was resumed on startup: ${message(error)}`);
   });
+  // Nor on git. What a window that was killed left behind is settled here and
+  // nowhere else: a worktree allocation written down but never made, or one whose
+  // directory has since gone (ADR-0009).
+  void conductor.reconcile().catch((error: unknown) => {
+    log.log("error", `the worktree journal was not reconciled: ${message(error)}`);
+  });
 
   channel.info("Agent Conductor activated.");
   return {
     teardown: async () => {
       await participant.stop();
+      // Before the saves settle: ending a Subagent is what makes its record say
+      // it ended, and that write has to be one of the ones waited for below.
+      await conductor.dispose();
       // Session records are written with nothing waiting on them, so that a Turn
       // never queues behind a file. This is the one moment that has to: a window
       // closing would otherwise take the record of how the Session ended with it.

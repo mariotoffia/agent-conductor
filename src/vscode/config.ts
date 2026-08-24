@@ -147,6 +147,8 @@ const scalarSchema = z.object({
   "orchestration.enabled": z.boolean().default(false),
   "orchestration.maxConcurrentSubagents": z.number().int().min(1).max(16).default(3),
   "orchestration.maxSpawnDepth": z.number().int().min(0).default(1),
+  "orchestration.maxSubagentsPerSession": z.number().int().min(1).max(200).default(20),
+  "orchestration.subagentTimeoutMs": z.number().int().min(1_000).default(900_000),
   "orchestration.subagentIsolation": z.enum(["shared", "worktree"]).default("worktree"),
   "orchestration.budgetUsdPerSubagent": z.number().nonnegative().default(2),
   "orchestration.defaultSubagentPreset": z.string().default(""),

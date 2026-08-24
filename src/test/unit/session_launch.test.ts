@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
+import type * as acp from "@agentclientprotocol/sdk";
 import { launchMockAgent, recordingProcessPort, type SentLine } from "../acp-harness.js";
 import { readSessions, resolveRuntime, savesSettled, type AgentProcess, type ExecutablePort, type RuntimeSpec, type SessionPorts, type StoragePort } from "../../core/index.js";
 import { launchSession, type SessionLaunch } from "../../vscode/sessionLaunch.js";
+import type { Orchestration } from "../../vscode/orchestration.js";
 import { SessionsTree } from "../../vscode/sessionsTree.js";
 import { readSettings } from "../../vscode/config.js";
 import { conditions, held } from "../session-fixtures.js";
@@ -230,4 +232,159 @@ sessionTest("a runtime the settings do not describe is refused by name", async (
   await assert.rejects(harness.launch({ runtimeId: "not-configured" }), /not-configured.*Connect a CLI/s);
   assert.equal(harness.agents.length, 0);
   t.diagnostic("nothing started");
+});
+
+
+/**
+ * Orchestration as this layer sees it: what was minted, what was attached, and
+ * what was given back. The real one has its own tests; what only this can show
+ * is that a Session start reaches all three at the right moments.
+ */
+function fakeOrchestration(over: { servers?: unknown[] } = {}) {
+  const record = {
+    injected: [] as Array<{ sessionKey: string; depth: number; roots: readonly string[] }>,
+    revoked: 0,
+    attached: [] as Array<{ sessionKey: string; sessionId: string; cwd: string }>,
+    released: [] as string[],
+  };
+  const orchestration: Orchestration = {
+    address: () => undefined,
+    targets: async () => [],
+    async inject(request) {
+      record.injected.push({
+        sessionKey: request.sessionKey,
+        depth: request.depth,
+        roots: request.roots,
+      });
+      return {
+        servers: (over.servers ?? []) as never,
+        revoke: () => {
+          record.revoked += 1;
+        },
+      };
+    },
+    attach(sessionKey, parent) {
+      record.attached.push({ sessionKey, sessionId: parent.sessionId, cwd: parent.cwd });
+    },
+    async release(sessionKey) {
+      record.released.push(sessionKey);
+    },
+    reconcile: async () => undefined,
+    releaseWorktree: async () => ({ removed: false }),
+    dispose: async () => undefined,
+  };
+  return { orchestration, record };
+}
+
+sessionTest("a session that never started leaves no capability behind", async (t) => {
+  fingerprint = await trustedFingerprint("crash-on-session-new");
+  const harness = harnessFor({ mode: "crash-on-session-new" });
+  t.after(() => {
+    for (const agent of harness.agents) agent.kill("SIGKILL");
+  });
+  const { orchestration, record } = fakeOrchestration();
+
+  await assert.rejects(harness.launch({ orchestration }));
+
+  assert.equal(record.injected.length, 1, "the shim is decided before the process starts");
+  assert.equal(
+    record.revoked,
+    1,
+    "authority minted for a session that never ran is authority nothing will ever end",
+  );
+  assert.deepEqual(record.attached, [], "nothing is attached to a spawn tree that has no session");
+});
+
+sessionTest("a live session is attached to the spawn tree, and released when its process is gone", async (t) => {
+  fingerprint = await trustedFingerprint();
+  const harness = harnessFor();
+  const { orchestration, record } = fakeOrchestration();
+
+  const session = await harness.launch({ orchestration });
+  const attached = record.attached[0];
+  assert.ok(attached);
+  assert.equal(attached.sessionId, session.sessionId, "a Shim acts for the Agent's own session");
+  assert.equal(attached.cwd, process.cwd());
+  assert.equal(record.injected[0]?.depth, 0, "a session the user started is a root");
+
+  await session.dispose();
+  await session.exited;
+  // Awaited through the same turn the `exited` handlers run in.
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(record.revoked, 1);
+  assert.deepEqual(record.released, [attached.sessionKey]);
+  t.diagnostic(`session ${session.sessionId}`);
+});
+
+/** A Subagent launch, with somewhere for its Updates to go. */
+function childLaunch(observed: acp.SessionNotification[] = []) {
+  return {
+    observed,
+    child: {
+      sessionKey: "child-key",
+      parentSessionKey: "parent-key",
+      parentSessionId: "parent-acp",
+      depth: 1,
+      cwd: process.cwd(),
+      worktree: { path: process.cwd(), branch: "agent-conductor/child" },
+      observe: (notification: acp.SessionNotification) => observed.push(notification),
+    },
+  };
+}
+
+sessionTest("a Subagent runs where the orchestrator put it and is told about nothing else", async (t) => {
+  fingerprint = await trustedFingerprint();
+  const harness = harnessFor({ roots: [process.cwd(), "/another-root"] });
+  const { orchestration, record } = fakeOrchestration();
+
+  const session = await harness.launch({ orchestration, ...childLaunch() });
+  t.after(() => session.dispose());
+  await savesSettled(harness.storage);
+
+  assert.deepEqual(
+    record.injected[0],
+    { sessionKey: "child-key", depth: 1, roots: [process.cwd()] },
+    "the parent repository is not a child's to be told about by default (ADR-0009)",
+  );
+  const [saved] = await readSessions(harness.storage);
+  assert.equal(saved.parentSessionId, "parent-acp");
+  assert.deepEqual(saved.worktree, { path: process.cwd(), branch: "agent-conductor/child" });
+});
+
+sessionTest("what a Subagent's Agent says reaches the orchestrator that will report it", async (t) => {
+  fingerprint = await trustedFingerprint();
+  const harness = harnessFor();
+  const { orchestration } = fakeOrchestration();
+  const { observed, child } = childLaunch();
+
+  const session = await harness.launch({ orchestration, child });
+  t.after(() => session.dispose());
+  await session.prompt("Reply with exactly: OK");
+
+  // The child's final message and what it cost are read off these and nothing
+  // else, so a launch that drops them is a Subagent that answers its parent with
+  // silence — and throws nowhere while doing it.
+  const said = observed
+    .flatMap((notification) => {
+      const update = notification.update as { sessionUpdate?: string; content?: { text?: string } };
+      return update.sessionUpdate === "agent_message_chunk" ? [update.content?.text ?? ""] : [];
+    })
+    .join("");
+  assert.equal(said, "OK");
+});
+
+sessionTest("a live Subagent's row offers the checkout it is working in", async (t) => {
+  fingerprint = await trustedFingerprint();
+  const harness = harnessFor();
+  const { orchestration } = fakeOrchestration();
+
+  const session = await harness.launch({ orchestration, ...childLaunch() });
+  t.after(() => session.dispose());
+
+  // Drawn from the Session rather than from its record, so a worktree only
+  // written down is one no row offers until the Session has ended — which is
+  // exactly when looking at its changes stops being useful.
+  const [row] = await harness.tree.getChildren();
+  assert.equal(row.live, true);
+  assert.deepEqual(row.worktree, { path: process.cwd(), branch: "agent-conductor/child" });
 });

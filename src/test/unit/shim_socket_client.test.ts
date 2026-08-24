@@ -4,14 +4,22 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test, type TestContext } from "node:test";
-import { MAX_FRAME_BYTES as CORE_FRAME_LIMIT } from "../../core/index.js";
-import { connectOrchestrator, MAX_FRAME_BYTES } from "../../shim/socketClient.js";
+import { MAX_FRAME_BYTES as CORE_FRAME_LIMIT, SHIM_SECRET_VARIABLE } from "../../core/index.js";
+import { connectOrchestrator, MAX_FRAME_BYTES, SECRET_VARIABLE } from "../../shim/socketClient.js";
 
 test("the Shim bounds its frames where the extension does", () => {
   assert.equal(
     MAX_FRAME_BYTES,
     CORE_FRAME_LIMIT,
     "the Shim cannot import the core, so nothing but this holds the two limits together",
+  );
+});
+
+test("the two ends name the capability's variable the same way", () => {
+  assert.equal(
+    SECRET_VARIABLE,
+    SHIM_SECRET_VARIABLE,
+    "the Shim reads a variable the extension has to set: a rename on one side is a Shim with no capability",
   );
 });
 

@@ -99,6 +99,12 @@ test("every context value the tree produces is one the manifest offers an action
       record({ sessionId: "sess-resumable" }),
       record({ sessionId: "sess-past", runtimeId: "ghost" }),
       record({ sessionId: "sess-worktree", worktree: { path: "/repo/w", branch: "b" } }),
+      record({
+        sessionId: "sess-held",
+        worktree: { path: "/repo/held", branch: "b" },
+        heldAt: 0,
+        heldBy: "another-window",
+      }),
     ]),
     conditions,
     now: () => 0,
@@ -113,6 +119,17 @@ test("every context value the tree produces is one the manifest offers an action
       exited: new Promise(() => undefined),
     },
     { workspace: "/repo" },
+  );
+  tree.track(
+    {
+      sessionId: "sess-live-worktree",
+      runtimeId: "claude",
+      state: "prompting",
+      modelSelection: { verification: "unavailable" },
+      effortSelection: { verification: "unavailable" },
+      exited: new Promise(() => undefined),
+    },
+    { workspace: "/repo/w", worktree: { path: "/repo/w", branch: "b" } },
   );
 
   const offered = new Map<string, string[]>();
@@ -132,7 +149,19 @@ test("every context value the tree produces is one the manifest offers an action
   assert.deepEqual(offered.get("sess-worktree"), [
     "agentConductor.resumeSession",
     "agentConductor.openWorktreeDiff",
+    "agentConductor.removeWorktree",
   ]);
+  // A Session still running is running *in* that directory. Looking at its
+  // changes is fine; removing it would delete the working directory of a
+  // process that is mid-turn, and everything it does after that is lost.
+  assert.deepEqual(offered.get("sess-live-worktree"), [
+    "agentConductor.cancelSession",
+    "agentConductor.openWorktreeDiff",
+  ]);
+  // A Session another window is running is drawn here from the shared record,
+  // and its worktree is under the shared root — so "not live in this window" is
+  // not "not live", and the same deletion is reachable through the other door.
+  assert.deepEqual(offered.get("sess-held"), ["agentConductor.openWorktreeDiff"]);
 });
 
 

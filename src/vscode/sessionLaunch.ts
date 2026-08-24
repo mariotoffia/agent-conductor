@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import type * as acp from "@agentclientprotocol/sdk";
 import type {
   ConductorSession,
@@ -8,6 +9,7 @@ import type {
   SessionPorts,
   StoragePort,
 } from "../core/index.js";
+import type { Orchestration } from "./orchestration.js";
 import type { ConductorSettings } from "./config.js";
 import type { SavedSession } from "./participantPorts.js";
 import { remember } from "./sessionRecords.js";
@@ -23,6 +25,38 @@ import { openTrustedSession, sessionFolders } from "./spawnGate.js";
  * of those is one token, none of them throws, and every service underneath goes
  * on passing its own tests. Here it is `vscode`-free and can be driven whole.
  */
+
+/**
+ * What makes this Session a Subagent rather than one the user started.
+ *
+ * All of it is the Orchestrator's, decided under a capability minted before the
+ * parent's Agent ever ran. Nothing here can be named by an Agent.
+ */
+export interface SubagentLaunch {
+  /** How the Orchestrator names this Session, and the key its own Shim acts
+   *  under. Not the Agent's session id: that does not exist until `session/new`
+   *  has been answered, and `mcpServers` goes out inside that very request. */
+  sessionKey: string;
+  parentSessionKey: string;
+  /** The parent's ACP session id, which is what the Subagent tree is drawn from. */
+  parentSessionId: string;
+  depth: number;
+  /** Where this Subagent works — its own worktree, or its parent's folder. */
+  cwd: string;
+  requestedModel?: string;
+  requestedEffort?: string;
+  worktree?: { path: string; branch: string };
+  /**
+   * Every Update this Subagent's Agent sends, back to the Orchestrator.
+   *
+   * Required, and not optional, because it is what the result is made of — the
+   * child's final message and what it cost are read off nothing else. A caller
+   * that forgets it produces a Subagent that finishes and tells its parent
+   * nothing, which throws nowhere and looks exactly like an Agent that had
+   * nothing to say.
+   */
+  observe(notification: acp.SessionNotification): void;
+}
 
 export interface SessionLaunch {
   /** Runtime the user asked for. */
@@ -52,6 +86,11 @@ export interface SessionLaunch {
   /** This window's own id, written beside a Session's hold so that another
    *  window can tell a Session that ended from one still running here. */
   window: string;
+  /** Orchestration, when this window has it. Absent means no Shim is ever
+   *  injected and no Session is ever attached to a spawn tree. */
+  orchestration?: Orchestration;
+  /** Set only when this Session is a Subagent (ADR-0004). */
+  child?: SubagentLaunch;
 }
 
 export async function launchSession(launch: SessionLaunch): Promise<ConductorSession> {
@@ -63,10 +102,22 @@ export async function launchSession(launch: SessionLaunch): Promise<ConductorSes
     );
   }
   const roots = launch.roots();
-  const { cwd, additionalDirectories } = sessionFolders(spec.id, roots, launch.load);
+  const child = launch.child;
+  // A Subagent works where the Orchestrator put it — its own worktree, or its
+  // parent's folder — and is told about nothing else. Handing a child the parent
+  // repository by default would defeat the separation the worktree exists for,
+  // and could not make it read-only in any case (ADR-0009).
+  const folders = child
+    ? { cwd: child.cwd, additionalDirectories: [] }
+    : sessionFolders(spec.id, roots, launch.load);
+  const { cwd, additionalDirectories } = folders;
   const trust = launch.trustFor(spec);
+  const orchestration = launch.orchestration;
   const entry = settings.runtimes[spec.id];
-  const { session, secrets } = await openTrustedSession({
+  // Minted here, before anything is sent, because `mcpServers` travels inside
+  // `session/new` and the Agent has not chosen its own id by then.
+  const sessionKey = child?.sessionKey ?? randomUUID();
+  const { session, secrets, revokeOrchestration } = await openTrustedSession({
     spec,
     executable: launch.executable,
     workspaceTrusted: launch.workspaceTrusted(),
@@ -75,13 +126,32 @@ export async function launchSession(launch: SessionLaunch): Promise<ConductorSes
     additionalDirectories,
     ...(launch.load ? { loadSessionId: launch.load.sessionId } : {}),
     secretEnvironment: () => launch.secretsFor(spec, entry?.secretEnvironment),
-    ...(entry?.defaultModel ? { requestedModel: entry.defaultModel } : {}),
-    ...(entry?.defaultEffort ? { requestedEffort: entry.defaultEffort } : {}),
+    ...(child?.requestedModel ?? entry?.defaultModel
+      ? { requestedModel: child?.requestedModel ?? entry?.defaultModel }
+      : {}),
+    ...(child?.requestedEffort ?? entry?.defaultEffort
+      ? { requestedEffort: child?.requestedEffort ?? entry?.defaultEffort }
+      : {}),
+    ...(orchestration
+      ? {
+          orchestrate: (runtime) =>
+            orchestration.inject({
+              runtime,
+              sessionKey,
+              ...(child ? { parentSessionKey: child.parentSessionKey } : {}),
+              depth: child?.depth ?? 0,
+              roots: [cwd, ...additionalDirectories],
+            }),
+        }
+      : {}),
     onUpdate: (notification) => {
       // The tree draws the two things only an Update carries; the participant
       // draws the rest. Both see every one, and the tree first, so a participant
       // that throws on one cannot take the row's figure with it.
       launch.sessions.observe(notification.sessionId, notification.update);
+      // And the Orchestrator, when this Session is a Subagent: what its parent
+      // is eventually handed is read off these and nowhere else.
+      child?.observe(notification);
       launch.onUpdate(notification);
     },
     ports: launch.ports(settings, roots, spec.displayName),
@@ -98,7 +168,29 @@ export async function launchSession(launch: SessionLaunch): Promise<ConductorSes
     // The launch this Session ran under. `openTrustedSession` only returns for a
     // Runtime whose fingerprint matched, so this is that fingerprint.
     ...(trust ? { fingerprint: trust.fingerprint } : {}),
+    ...(child ? { parentSessionId: child.parentSessionId } : {}),
+    ...(child?.worktree ? { worktree: child.worktree } : {}),
   });
-  launch.sessions.track(session, { workspace: cwd, secrets });
+  launch.sessions.track(session, {
+    workspace: cwd,
+    secrets,
+    // A live row's worktree comes from here, not from the record: a session this
+    // window is running is drawn from the session and never from the file, so a
+    // worktree only written down is one no row offers until the session ends.
+    ...(child?.worktree ? { worktree: child.worktree } : {}),
+  });
+  // Only now: a Session that is running is one a Shim may act for, and one whose
+  // own children have somewhere to hang. Both end together — the capability is
+  // withdrawn and everything below it is cancelled the moment the process is
+  // gone, whether it was disposed, cancelled, or simply died (ADR-0008).
+  orchestration?.attach(sessionKey, {
+    sessionId: session.sessionId,
+    runtimeId: spec.id,
+    cwd,
+  });
+  void session.exited.then(() => {
+    revokeOrchestration();
+    void orchestration?.release(sessionKey);
+  });
   return session;
 }

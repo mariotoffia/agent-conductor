@@ -298,13 +298,6 @@ test("every setting the manifest declares is one the client reads", async () => 
  * that gains a consumer has to be taken off the list.
  */
 const NOT_ACTED_ON: Record<string, string> = {
-  "orchestration.maxSpawnDepth": "no orchestrator to bound",
-  "orchestration.maxConcurrentSubagents": "no orchestrator to bound",
-  "orchestration.budgetUsdPerSubagent": "no orchestrator to bound",
-  "orchestration.subagentIsolation": "no orchestrator to isolate",
-  "orchestration.defaultSubagentPreset": "no orchestrator to configure",
-  "presets": "chosen per subagent, and nothing spawns one yet",
-  "worktrees.root": "nothing creates a worktree yet",
   "gemini.writeWorkspaceSettings": "the workspace suppression channel is not wired end to end",
 };
 
