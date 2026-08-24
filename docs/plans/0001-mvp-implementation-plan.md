@@ -477,10 +477,6 @@ interface EffectiveSelection {
 - [x] Package with `make package`. There is one extension file (ADR-0011). Never publish automatically. Commit: `docs: describe verified Agent Conductor behavior`.
   - `dist/agent-conductor.vsix` builds, and `npx @vscode/vsce ls` shows the allow-list shipping exactly the bundles, the manifest, LICENSE, the icon, README and the five walkthrough pages — no plans, no sources, no reports.
 
-## Deferred Work
-
-The ACP-agent Facade remains optional and must be planned separately after Tasks 1-16 pass. AHP remains excluded by ADR-0001. Live-CLI smoke tests remain manual/optional because CI must not require installed CLIs, credentials, subscriptions, or network.
-
 ## Global Completion Gate
 
 The MVP is complete only when all of the following are evidenced in a fresh run:
@@ -496,6 +492,5 @@ All commands must exit 0; integration output must report real extension-host tes
 ## Plan Self-Review
 
 - Spec coverage: ACP client, stable UI, runtime discovery, Read-back, suppression, permissions/fs/terminal, wizard, registry, auth, persistence, orchestration, worktrees, Shim, tests, packaging, and docs are assigned to tasks.
-- Deferred scope is explicit: Facade, AHP, and credentialed live-CLI CI are not hidden MVP requirements.
 - Names are durable domain terms from `UBIQUITOUS.md`; implementation identifiers and test names do not reference plan/task/finding IDs.
 - No implementation step relies on an unversioned remote executable, Agent-supplied security classification, shared process cancellation, or a placeholder integration pass.
