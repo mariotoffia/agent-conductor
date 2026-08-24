@@ -14,7 +14,9 @@ function runFixture(name: string): Promise<{ code: number | null; output: string
   const fixture = fileURLToPath(new URL(`../fixtures/${name}`, import.meta.url));
   const child = spawn(
     process.execPath,
-    ["--import", "tsx", "--import", guard, "--test", fixture],
+    // The reporter is pinned: node's default changed between releases, and the
+    // assertions below read the child's report.
+    ["--import", "tsx", "--import", guard, "--test", "--test-reporter=tap", fixture],
     {
       // `NODE_TEST_CONTEXT` marks this process as a test run, and node refuses to
       // start a nested one; the fixture has to be run as its own suite.
