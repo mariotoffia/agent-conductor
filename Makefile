@@ -10,6 +10,9 @@ SHELL := /bin/bash -o pipefail
 .SHELLFLAGS := -o pipefail -ec
 NPM   ?= npm
 NODE  ?= node
+# The VS Code CLI; `code-insiders` works too. Missing from PATH until VS Code's
+# own "Shell Command: Install 'code' command in PATH" has been run once.
+CODE  ?= code
 REPORTS := reports
 CORE_DIR ?= src/core
 CORE_LOG ?= $(REPORTS)/core-imports.log
@@ -20,7 +23,8 @@ CORE_PAT ?= ['\"\`]vscode['\"\`]
 
 .DEFAULT_GOAL := help
 .PHONY: help install doctor build watch lint typecheck core-imports gate-selftest pipe-probe \
-        test test-integration smoke-live check check-all package release registry-cache adr plan clean
+        test test-integration smoke-live check check-all package install-plugin uninstall-plugin \
+        release registry-cache adr plan clean
 
 help: ## Show this help
 	@awk 'BEGIN {FS = ":.*##"} /^[a-zA-Z_-]+:.*?##/ { printf "  \033[36m%-18s\033[0m %s\n", $$1, $$2 }' $(MAKEFILE_LIST)
@@ -138,6 +142,18 @@ check-all: build lint test test-integration ## check + extension-host integratio
 
 package: build ## Marketplace VSIX (stable APIs only)
 	npx @vscode/vsce package --out dist/agent-conductor.vsix
+
+# Local install of what this tree builds, for trying the extension in your own
+# VS Code. `--force` reinstalls over the same version, which is every dev
+# iteration. Publishing stays a human act; this touches one machine.
+install-plugin: package ## Install the extension file into this machine's VS Code (reload the window after)
+	@command -v $(CODE) >/dev/null 2>&1 || { echo "MISSING: $(CODE) — in VS Code run 'Shell Command: Install code command in PATH'"; exit 1; }
+	$(CODE) --install-extension dist/agent-conductor.vsix --force
+	@echo "installed — reload the VS Code window to load it"
+
+uninstall-plugin: ## Remove the extension from this machine's VS Code
+	@command -v $(CODE) >/dev/null 2>&1 || { echo "MISSING: $(CODE)"; exit 1; }
+	$(CODE) --uninstall-extension $$($(NODE) -p "const p=require('./package.json'); p.publisher+'.'+p.name")
 
 # There is no second, proposed-API package target. A manifest may only ask VS
 # Code for a proposal this extension implements, and the sessions proposal is

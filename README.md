@@ -43,6 +43,7 @@ An agent CLI is a program that runs with your permissions. It is not a sandboxed
 | `make smoke-live` | probe the agent CLIs installed on this machine, live — manual, never part of CI |
 | `make check` / `make check-all` | both of the above, plus a build (`check-all` also runs the VS Code tests) |
 | `make package` | builds the Marketplace extension file |
+| `make install-plugin` / `make uninstall-plugin` | put that file into your own VS Code, or take it out again (needs the `code` CLI) |
 | `make release` | the full check plus the extension file |
 | `make adr NAME=…` / `make plan NAME=…` | starts a new decision record / plan |
 
