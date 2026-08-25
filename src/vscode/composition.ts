@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import type * as acp from "@agentclientprotocol/sdk";
 import * as vscode from "vscode";
 import {
+  adapterSearchPath,
   executablePort,
   message,
   describeRefresh,
@@ -41,6 +42,8 @@ import { launchSession } from "./sessionLaunch.js";
 import { sessionActions, sessionCommands } from "./sessionActions.js";
 import { SessionsTree, type SessionNode } from "./sessionsTree.js";
 import { connectCli } from "./wizard.js";
+import type { WizardPorts } from "./wizardPorts.js";
+import { disconnectCli } from "./disconnect.js";
 import { wizardHost, wizardTerminals } from "./wizardHost.js";
 
 /**
@@ -127,6 +130,11 @@ export function activateConductor(context: vscode.ExtensionContext): ConductorAc
   const log = liveLogPort(channel, () => settings()["logging.level"]);
 
   const storage = fileStorage(context.globalStorageUri.fsPath);
+  // Adapters this Client installs live under its own global storage, and are
+  // searched before the machine's `PATH`. One port for the whole window, so a
+  // Session, the Orchestrator and a trust grant all resolve a bare name to the
+  // same file — and fingerprint the one that will actually run (ADR-0007).
+  const executable = executablePort({ path: adapterSearchPath(context.globalStorageUri.fsPath) });
   // Made afresh per activation, and never written anywhere but beside a hold: a
   // window that was killed comes back as a different one, so the Sessions it was
   // running stop being its own and become somebody's that has gone quiet.
@@ -213,7 +221,7 @@ export function activateConductor(context: vscode.ExtensionContext): ConductorAc
     settings,
     runtimes: () => runtimes(),
     trustFor: (spec) => trust.get(spec.id),
-    executable: executablePort(),
+    executable,
     workspace: () => workspaceRoots()[0],
     openChild: (child: ChildLaunch) => startSession(child.runtimeId, () => undefined, undefined, child),
     storage,
@@ -252,7 +260,7 @@ export function activateConductor(context: vscode.ExtensionContext): ConductorAc
       trustFor: (spec) => trust.get(spec.id),
       secretsFor: (spec, references) =>
         resolveSecretEnvironment(context.secrets, spec.id, references),
-      executable: executablePort(),
+      executable,
       ports: (current, roots, agentLabel) =>
         sessionPorts({
           settings: current,
@@ -340,6 +348,19 @@ export function activateConductor(context: vscode.ExtensionContext): ConductorAc
     },
     releaseWorktree: (path, release) => conductor.releaseWorktree(path, release),
   });
+  // Built per invocation, as it always was: it reads settings and the window's
+  // trust as they are when the command runs, not as they were at activation.
+  const wizardPorts = (): WizardPorts =>
+    wizardHost(context, {
+      form: askForm(),
+      consent: askConsent(),
+      channel,
+      runtimes,
+      runInTerminal,
+      recordTrust,
+      settings,
+      log,
+    });
   context.subscriptions.push(
     vscode.commands.registerCommand(OPEN_DIFF_COMMAND, (id: unknown) => openDiff(diffs, id)),
     ...Object.entries(sessionCommands(actions)).map(([id, run]) =>
@@ -347,19 +368,12 @@ export function activateConductor(context: vscode.ExtensionContext): ConductorAc
     // The Connect-a-CLI wizard is the only thing that records Runtime Trust:
     // until a Runtime has been through it, no identity is approved and every
     // spawn is refused, which is the direction that fails closed (ADR-0007).
-    vscode.commands.registerCommand("agentConductor.connectCli", () =>
-      connectCli(
-        wizardHost(context, {
-          form: askForm(),
-          consent: askConsent(),
-          channel,
-          runtimes,
-          runInTerminal,
-          recordTrust,
-          settings,
-          log,
-        }),
-      )),
+    vscode.commands.registerCommand("agentConductor.connectCli", () => connectCli(wizardPorts())),
+    // The reverse, and the only thing that drops an approval: what connecting
+    // wrote — the entry, the approval, the Adapter — is what disconnecting
+    // offers to take away, so none of it is left for a settings file to hold.
+    vscode.commands.registerCommand("agentConductor.disconnectCli", () =>
+      disconnectCli({ ...wizardPorts(), forgetTrust: (runtimeId) => trust.forget(runtimeId) })),
     vscode.commands.registerCommand("agentConductor.refreshRegistry", async () => {
       const result = await vscode.window.withProgress(
         { location: vscode.ProgressLocation.Notification, title: "Refreshing the ACP agent registry…" },
@@ -415,7 +429,7 @@ export function activateConductor(context: vscode.ExtensionContext): ConductorAc
               if (!spec) throw new Error(`runtime ${runtimeId} is not configured`);
               const workspace = workspaceRoots()[0];
               const runtime = await resolveRuntime(spec, {
-                executable: executablePort(),
+                executable,
                 ...(workspace ? { workspace } : {}),
               });
               // The fingerprint, never a flag: trust is re-derived from the

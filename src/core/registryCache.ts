@@ -1,3 +1,4 @@
+import { delimiter, join } from "node:path";
 import { z } from "zod";
 import { message } from "./failures.js";
 import { plainText } from "./sealText.js";
@@ -260,19 +261,88 @@ export function describeRefresh(result: RegistryRefresh): string {
 const PACKAGE_NAME = /^(?:@[a-z0-9~][a-z0-9-._~]*\/)?[a-z0-9~][a-z0-9-._~]*$/;
 
 /**
- * Command the connection wizard runs — deliberately, with the user watching — to
- * install an Adapter at one exact version. It is the only place the extension
- * names a package manager, and no Session path calls it: starting a Session must
- * never install or fetch anything (ADR-0007).
+ * Where an Adapter this Client installed lives, and how it is found.
+ *
+ * Under the extension's own global storage rather than the machine's npm prefix:
+ * an Adapter is this Client's dependency, pinned to one exact version by the
+ * catalog, and installing it globally would put that pin in a directory shared
+ * with everything else the user has installed — needing privileges on some
+ * machines, changing what a bare name means everywhere on the rest, and leaving
+ * nothing to remove when a CLI is disconnected. A directory of our own is
+ * removable, and removing it is the whole of the uninstall.
+ *
+ * Nothing about Runtime Trust changes: the bin directory is searched like any
+ * other `PATH` entry, and what a bare name lands on is still resolved through
+ * symlinks and fingerprinted before anything starts (ADR-0007).
  */
-export function adapterInstallCommand(adapter: AdapterPackage): { command: string; args: string[] } {
-  if (!PACKAGE_NAME.test(adapter.package)) {
-    throw new Error(`adapter package name is not one: "${adapter.package}"`);
-  }
+export function adapterHome(globalStorage: string): string {
+  return join(globalStorage, "adapters");
+}
+
+/** Where npm links an Adapter's executable, given the home above. */
+export function adapterBinDir(globalStorage: string): string {
+  return join(adapterHome(globalStorage), "node_modules", ".bin");
+}
+
+/**
+ * `PATH` with our own Adapters first.
+ *
+ * First, because the version in there is the one the catalog pins and the user
+ * approved through the wizard. A copy of the same Adapter installed globally
+ * some other time would otherwise shadow it, and the fingerprint the user
+ * approved would belong to a file this Client never installed. A user who does
+ * want their own names it outright: an absolute `command` in settings never
+ * reaches a `PATH` search at all.
+ */
+export function adapterSearchPath(globalStorage: string, path = process.env.PATH ?? ""): string {
+  const ours = adapterBinDir(globalStorage);
+  return path ? `${ours}${delimiter}${path}` : ours;
+}
+
+/**
+ * A directory a terminal will read as one word and nothing else.
+ *
+ * An allow-list, because this is a shell boundary: the install runs in a
+ * terminal, deliberately and in view, and the path reaches it as text. Global
+ * storage is `<user data>/globalStorage/<publisher>.<name>`, which is spaces at
+ * worst — so a path with anything else in it is not one of ours, and is refused
+ * rather than quoted and hoped for.
+ */
+const PLAIN_PATH = /^[A-Za-z0-9 ._:/\\-]+$/;
+
+function quotePath(path: string): string {
+  if (!PLAIN_PATH.test(path)) throw new Error(`adapter directory is not a plain path: "${path}"`);
+  return `"${path}"`;
+}
+
+/**
+ * Command the connection wizard runs — deliberately, with the user watching — to
+ * install an Adapter at one exact version, into the directory above. It is the
+ * only place the extension names a package manager, and no Session path calls
+ * it: starting a Session must never install or fetch anything (ADR-0007).
+ *
+ * A command line rather than an argument vector, because a terminal is the only
+ * thing that ever runs it and a caller that had to quote the path itself would
+ * eventually forget to.
+ */
+export function adapterInstallCommand(adapter: AdapterPackage, home: string): string {
   if (!isExactVersion(adapter.version)) {
     throw new Error(
       `adapter ${adapter.package}: installation needs an exact version, got "${adapter.version}"`,
     );
   }
-  return { command: "npm", args: ["install", "--global", `${adapter.package}@${adapter.version}`] };
+  return `npm install --prefix ${quotePath(home)} ${packageName(adapter)}@${adapter.version}`;
+}
+
+/** The reverse, for disconnecting a CLI. No version: what is there is what the
+ *  pin put there, and naming a different one would leave it installed. */
+export function adapterRemoveCommand(adapter: AdapterPackage, home: string): string {
+  return `npm uninstall --prefix ${quotePath(home)} ${packageName(adapter)}`;
+}
+
+function packageName(adapter: AdapterPackage): string {
+  if (!PACKAGE_NAME.test(adapter.package)) {
+    throw new Error(`adapter package name is not one: "${adapter.package}"`);
+  }
+  return adapter.package;
 }

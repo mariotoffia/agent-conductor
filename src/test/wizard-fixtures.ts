@@ -61,6 +61,9 @@ export interface Script {
   /** An entry that keeps winning whatever is written, as a higher-priority
    *  settings scope does. */
   overriddenBy?: RuntimeSetting;
+  /** Where this window keeps the Adapters it installed. A real one is under
+   *  VS Code's global storage, which on macOS has a space in it. */
+  adapterHome?: string;
 }
 
 export interface WizardHarness {
@@ -199,6 +202,7 @@ export function wizardHarness(script: Script = {}): WizardHarness {
       trusted.push({ runtimeId, trust });
     },
     runInTerminal: (name, command) => terminals.push({ name, command }),
+    adapterHome: () => script.adapterHome ?? "/home/user/Application Support/conductor/adapters",
     orchestrationEnabled: () => script.orchestration ?? false,
     workspaceTrusted: () => script.workspaceTrusted ?? true,
     session: { process: recordingProcessPort(spawns, sent, agents) },

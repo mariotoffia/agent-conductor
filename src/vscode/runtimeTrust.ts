@@ -21,6 +21,9 @@ export interface RuntimeTrustStore {
   record(runtimeId: string, trust: RuntimeTrust): Promise<void>;
   /** What they approved, or nothing because they never did. */
   get(runtimeId: string): RuntimeTrust | undefined;
+  /** Drops one Runtime's approval, so nothing starts on it until the wizard is
+   *  run again. Disconnecting a CLI is the only caller. */
+  forget(runtimeId: string): Promise<void>;
 }
 
 export function runtimeTrustStore(storage: TrustStorage): RuntimeTrustStore {
@@ -49,6 +52,13 @@ export function runtimeTrustStore(storage: TrustStorage): RuntimeTrustStore {
       // them — and start an Agent on it (ADR-0007).
       await storage.update(trustKey(runtimeId), trust);
       granted.set(runtimeId, trust);
+    },
+    async forget(runtimeId) {
+      // Storage first, and this window's memory only once it is gone from it:
+      // `get` reads storage before memory, so a failed delete leaves both
+      // holding the approval the user still has, rather than one of them.
+      await storage.update(trustKey(runtimeId), undefined);
+      granted.delete(runtimeId);
     },
     get(runtimeId) {
       // Storage first, so a Runtime re-approved in another window is read as

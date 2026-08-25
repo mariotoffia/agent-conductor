@@ -22,9 +22,21 @@ import type { SessionNode } from "./sessionsTree.js";
  * is what somebody clicked, not evidence that clicking it is still safe.
  */
 
-/** Built-in commands this module drives. Neither is ours. */
+/** Built-in commands this module drives. None of them is ours. */
 const GIT_OPEN_REPOSITORY = "git.openRepository";
 const SHOW_SOURCE_CONTROL = "workbench.view.scm";
+const OPEN_CHAT = "workbench.action.chat.open";
+
+/**
+ * The mention that opens a Session, as the manifest spells it.
+ *
+ * Exported so a test can hold it against `chatParticipants`: renaming the
+ * participant there would otherwise leave this typing a mention nobody answers.
+ */
+export const MENTION = "@conductor";
+
+/** Said when the Session ended but Chat did not open. */
+const ENDED = "Session ended; the next prompt starts a new one.";
 
 /** The window surfaces one action needs. */
 export interface SessionActionHost {
@@ -60,7 +72,8 @@ export interface SessionActions {
   openWorktreeDiff(node?: SessionNode): Promise<void>;
   removeWorktree(node?: SessionNode): Promise<void>;
   resumeOnStartup(): Promise<void>;
-  /** Ends the live Session so the next prompt opens a new one. */
+  /** Ends the live Session and opens Chat with the mention typed, so the next
+   *  prompt opens a new one. */
   newSession(): Promise<void>;
   /** Every Turn this window is running. The way out of one that will not stop,
    *  so it names no Session and must not therefore mean none. */
@@ -104,7 +117,18 @@ export function sessionActions(options: SessionActionOptions): SessionActions {
 
     async newSession() {
       await participant.dispose();
-      host.inform("Session ended; the next prompt starts a new one.");
+      // The button says New Session, so it has to leave one being started. VS
+      // Code gives an extension no way to send a chat participant a turn, so
+      // the most this can do is open Chat with the mention already typed and
+      // let the user's own prompt open the Session — `isPartialQuery`, because
+      // a turn nobody wrote is not one they asked for.
+      try {
+        await host.execute(OPEN_CHAT, { query: `${MENTION} `, isPartialQuery: true });
+      } catch {
+        // A window whose Chat will not open has still ended the Session, and
+        // saying so is then the whole of what the button did.
+        host.inform(ENDED);
+      }
     },
 
     /**

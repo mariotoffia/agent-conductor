@@ -323,3 +323,46 @@ test("the view the extension registers is the view the manifest contributes", as
     `no provider is registered for ${declared[0].id}`,
   );
 });
+
+test("the wizard is reachable from the view, and every route to it names a command that exists", async () => {
+  const manifest = JSON.parse(
+    await readFile(new URL("../../../package.json", import.meta.url), "utf8"),
+  ) as {
+    contributes: {
+      commands: { command: string }[];
+      viewsWelcome: { view: string; contents: string }[];
+      menus: { "view/title": { command: string; when: string }[] };
+      configuration: { properties: Record<string, { markdownDescription?: string }> };
+      views: Record<string, { id: string }[]>;
+    };
+  };
+  const { commands, viewsWelcome, menus, configuration } = manifest.contributes;
+  const declared = new Set(commands.map((entry) => entry.command));
+  const WIZARD = "agentConductor.connectCli";
+
+  // Found through the palette alone, the wizard is found by someone who already
+  // knows its name. The view is where a window with no runtimes is looked at.
+  assert.ok(menus["view/title"].some((item) => item.command === WIZARD));
+  assert.ok(viewsWelcome.some((entry) => entry.contents.includes(`command:${WIZARD}`)));
+
+  // A command URI is a string until it is clicked, and a renamed command leaves
+  // every link that named it looking exactly as it did while it worked.
+  const linked = [
+    ...viewsWelcome.flatMap((entry) => [...entry.contents.matchAll(/command:([\w.]+)/g)]),
+    ...Object.values(configuration.properties).flatMap((property) => [
+      ...(property.markdownDescription ?? "").matchAll(/command:(agentConductor[\w.]+)/g),
+    ]),
+  ].map(([, id]) => id);
+  assert.ok(linked.length > 0);
+  for (const id of [...linked, ...menus["view/title"].map((item) => item.command)]) {
+    assert.ok(declared.has(id), `${id} is linked but not contributed`);
+  }
+
+  // The welcome only ever draws in the view it was declared for.
+  const views = new Set(
+    Object.values(manifest.contributes.views)
+      .flat()
+      .map((view) => view.id),
+  );
+  for (const entry of viewsWelcome) assert.ok(views.has(entry.view), `${entry.view} is not a view`);
+});

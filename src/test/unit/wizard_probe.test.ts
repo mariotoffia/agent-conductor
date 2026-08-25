@@ -167,8 +167,11 @@ wizardTest("a runtime that is not installed offers to install its adapter", asyn
 
   assert.deepEqual(
     harness.terminals.map((terminal) => terminal.command),
-    ["npm install --global @agentclientprotocol/codex-acp@1.4.0"],
-    "the exact version the catalog names, installed as its own step",
+    [
+      'npm install --prefix "/home/user/Application Support/conductor/adapters"' +
+        " @agentclientprotocol/codex-acp@1.4.0",
+    ],
+    "the exact version the catalog names, into this extension's own directory",
   );
   assert.deepEqual(harness.writes, [], "an install that changed nothing connects nothing");
 });

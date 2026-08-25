@@ -1,5 +1,7 @@
 import * as vscode from "vscode";
 import {
+  adapterHome,
+  adapterSearchPath,
   executablePort,
   nodeProcessPort,
   type LogPort,
@@ -57,7 +59,10 @@ export function wizardHost(
         () => run(),
       ),
     runtimes: services.runtimes,
-    executable: executablePort(),
+    // The Adapters this Client installed are searched before the machine's own
+    // `PATH`, so the version the wizard just installed is the one it detects.
+    executable: executablePort({ path: adapterSearchPath(context.globalStorageUri.fsPath) }),
+    adapterHome: () => adapterHome(context.globalStorageUri.fsPath),
     settings: {
       runtimesAt: (scope) => savedRuntimes(scope),
       runtimeEntry: (runtimeId) => services.settings().runtimes[runtimeId],

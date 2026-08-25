@@ -79,6 +79,9 @@ export interface WizardPorts {
   /** Runs a command in a terminal the user can watch: a CLI's own login, or
    *  installing an Adapter. Never a string that came from settings or an Agent. */
   runInTerminal(name: string, command: string): void;
+  /** Where Adapters this Client installs live — its own directory under global
+   *  storage, not the machine's npm prefix. */
+  adapterHome(): string;
   /** `agentConductor.orchestration.enabled`. */
   orchestrationEnabled(): boolean;
   /** `vscode.workspace.isTrusted`. Probing starts an Agent, so the window's own

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { test } from "node:test";
-import { sessionActions, sessionCommands } from "../../vscode/sessionActions.js";
+import { MENTION, sessionActions, sessionCommands } from "../../vscode/sessionActions.js";
 import { SessionsTree } from "../../vscode/sessionsTree.js";
 import { fileRoots, sessionFolders } from "../../vscode/spawnGate.js";
 import { actionHarness, conditions, held, record, rowNode as node } from "../session-fixtures.js";
@@ -261,15 +261,19 @@ test("every command the view offers runs the action it is named for", async () =
   // registration bound to the wrong function, or to none, is a button that
   // silently does nothing and a manifest that still looks right.
   assert.equal(harness.disposals(), 1);
-  // And says so: a session that ends with no word for it reads as a click that
-  // did nothing.
-  assert.equal(harness.said.length, 1);
+  // And leaves one being started: a button called New Session that only ends
+  // the old one reads as a click that did nothing.
+  assert.deepEqual(harness.executed[0], [
+    "workbench.action.chat.open",
+    { query: `${MENTION} `, isPartialQuery: true },
+  ]);
+  assert.equal(harness.said.length, 0);
   // The window's cancel-all names no Session, and must not therefore mean none.
   assert.deepEqual(harness.cancelled, [undefined, "sess-row"]);
   assert.deepEqual(harness.resumed, [
     { sessionId: "sess-row", runtimeId: "claude", workspace: "/repo" },
   ]);
-  assert.deepEqual(harness.executed[0], ["git.openRepository", "/repo/w"]);
+  assert.ok(harness.executed.some((call) => call[0] === "git.openRepository" && call[1] === "/repo/w"));
 });
 
 test("the commands the manifest contributes for the view are exactly the ones wired", async () => {
@@ -283,9 +287,17 @@ test("the commands the manifest contributes for the view are exactly the ones wi
   const wired = new Set(Object.keys(sessionCommands(actionHarness().actions)));
   const composition = await readFile(new URL("../../vscode/composition.ts", import.meta.url), "utf8");
 
-  // Both directions. A command in the menus and not in the table is a dead
+  // Both directions. A command in the menus and registered nowhere is a dead
   // button; one in the table and not in the menus is a command nobody can find.
-  assert.deepEqual([...offered].sort(), [...wired].sort());
+  // A menu may also offer a command the window registers on its own — the
+  // wizard is one — so the table is not the only place a button may land.
+  for (const command of offered) {
+    assert.ok(
+      wired.has(command) || composition.includes(`registerCommand("${command}"`),
+      `${command} is offered by a menu and registered nowhere`,
+    );
+  }
+  assert.deepEqual([...wired].filter((command) => !offered.has(command)), []);
   // And the table is what the window registers, rather than a second list.
   assert.match(composition, /Object\.entries\(sessionCommands\(actions\)\)/);
 });
@@ -400,4 +412,44 @@ test("a row the tree built for an agent that cannot reattach is refused", async 
   await harness.actions.resume(row);
 
   assert.deepEqual(harness.resumed, []);
+});
+
+test("ending a session leaves chat open with the mention typed, not just a toast", async () => {
+  const harness = actionHarness();
+
+  await harness.actions.newSession();
+
+  // VS Code has no API for sending a chat participant a turn, so the query is
+  // partial on purpose: the prompt that opens the Session is the user's own.
+  assert.equal(harness.disposals(), 1);
+  assert.deepEqual(harness.executed, [
+    ["workbench.action.chat.open", { query: `${MENTION} `, isPartialQuery: true }],
+  ]);
+  assert.deepEqual(harness.said, []);
+});
+
+test("a window whose chat will not open has still ended the session, and says so", async () => {
+  const harness = actionHarness();
+  harness.refuseWith(new Error("command 'workbench.action.chat.open' not found"));
+
+  await harness.actions.newSession();
+
+  // The session is gone either way, and a click that ends one silently is the
+  // thing to avoid — so what the button did is said when it could not be shown.
+  assert.equal(harness.disposals(), 1);
+  assert.equal(harness.said.length, 1);
+  assert.match(harness.said[0], /Session ended/);
+});
+
+test("the mention this window types is the participant the manifest contributes", async () => {
+  const manifest = JSON.parse(
+    await readFile(new URL("../../../package.json", import.meta.url), "utf8"),
+  ) as { contributes: { chatParticipants: { name: string }[] } };
+
+  // Renaming the participant would otherwise leave New Session typing a mention
+  // nobody answers — and it would look exactly as it does while it works.
+  assert.deepEqual(
+    manifest.contributes.chatParticipants.map((participant) => `@${participant.name}`),
+    [MENTION],
+  );
 });

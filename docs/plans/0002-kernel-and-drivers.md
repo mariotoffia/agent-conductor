@@ -12,6 +12,12 @@ Status: draft — plans are temporary; promote durable decisions to ADRs (AGENTS
 
 ## What is being built
 
+TODO: What about...
+1. Memory driver?
+2. How are a driver different from a mcp or internal tool call
+3. Do we support "meta level" tool/MCP calls?
+4. If (3) mcp driver?
+
 One Loop per window owning one Work Queue. Everything that wants work done — a
 chat prompt, a cron tick, a Subagent asking over the Shim — puts a Work Item on
 it. Five Stages drain it; four of them are Drivers.
