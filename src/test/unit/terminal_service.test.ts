@@ -2,7 +2,8 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { test, type TestContext } from "node:test";
-import { TerminalService } from "../../vscode/terminals.js";
+import { PassThrough } from "node:stream";
+import { collectPipe, TerminalService } from "../../vscode/terminals.js";
 import { consent, run, script, workspace } from "../terminal-fixtures.js";
 
 test("a command runs and both of its output streams are captured", async (t: TestContext) => {
@@ -331,4 +332,29 @@ test("a recycled group id is not signalled on the strength of an id that has mov
     [],
     "a stranger's process group was signalled on a recycled id",
   );
+});
+
+/**
+ * A command's pipe can fail while the command is still running, and a stream
+ * that fails with nothing listening does not report it — `emit("error")` throws,
+ * out of Node's own read path and into whichever process is reading. A broken
+ * pipe is not a reason to take an extension host down, so it is collected like
+ * anything else the command said.
+ */
+test("a pipe that fails says so in the output rather than throwing at the host", () => {
+  const collected: Buffer[] = [];
+  const pipe = new PassThrough();
+  collectPipe(pipe, (chunk) => collected.push(chunk));
+
+  pipe.emit("data", Buffer.from("started", "utf8"));
+  pipe.emit("error", new Error("read EIO"));
+  pipe.emit("data", Buffer.from("after", "utf8"));
+
+  const said = Buffer.concat(collected).toString("utf8");
+  assert.match(said, /started/);
+  assert.match(said, /read EIO/, "output that stops has to carry the reason it stopped");
+});
+
+test("a command with no pipe at all is collected without complaint", () => {
+  assert.doesNotThrow(() => collectPipe(null, () => undefined));
 });

@@ -61,6 +61,14 @@ export function sessionPorts(request: SessionPortsRequest): SessionPorts {
  * decided by `logsAt`, in the core, where a test can reach it — this is only the
  * wiring. `off` drops the record; the level is re-read per record, so this is
  * the composition and never the policy.
+ *
+ * Both halves are calls into the window — the configured level is read, then the
+ * channel is written — and a window on its way out answers either by throwing.
+ * Records are made from places nothing is waiting on: an Agent process that
+ * ended, a pipe that drained, a Turn's `finally`. So the guard is here, where
+ * every caller routes through, rather than at each of the dozens of them: none
+ * has anywhere to put the failure, and a log that ends the work that was logging
+ * is worse than a record nobody kept.
  */
 export function liveLogPort(channel: vscode.LogOutputChannel, level: () => string): LogPort {
   const write: Record<LogLevel, (text: string) => void> = {
@@ -71,8 +79,12 @@ export function liveLogPort(channel: vscode.LogOutputChannel, level: () => strin
   };
   return {
     log: (severity, text) => {
-      const configured = level();
-      if (configured !== "off" && logsAt(configured, severity)) write[severity](text);
+      try {
+        const configured = level();
+        if (configured !== "off" && logsAt(configured, severity)) write[severity](text);
+      } catch {
+        // The window this was going to is gone. There is nowhere left to say so.
+      }
     },
   };
 }

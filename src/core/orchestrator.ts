@@ -394,13 +394,31 @@ export function createOrchestrator(ports: OrchestratorPorts): Orchestrator {
   async function cancelChild(child: Child): Promise<void> {
     child.cancelled = true;
     await release(child.handle);
-    await child.session?.cancel();
-    await child.session?.dispose();
+    // Both steps happen, in this order, whatever either of them does — and this
+    // never throws, because ending the tree is a loop over children and one
+    // Agent that refuses to stop would otherwise end the loop, leaving every
+    // sibling after it running with nothing left that can reach them. Within one
+    // child the same applies: only `dispose` takes the process down, so a cancel
+    // the Agent refused must not be allowed to skip it (ADR-0008).
+    try {
+      await child.session?.cancel();
+    } catch (error) {
+      ports.log?.log("error", `subagent ${child.handle} refused to be cancelled: ${message(error)}`);
+    }
+    let ended = true;
+    try {
+      await child.session?.dispose();
+    } catch (error) {
+      ended = false;
+      ports.log?.log("error", `subagent ${child.handle} refused to be ended: ${message(error)}`);
+    }
     // Waited for, because a cancel that has not finished is a Subagent whose
     // state is still whatever it was — so a caller told "cancelled" and a caller
     // asking for the result would otherwise be given two different answers about
-    // one handle. Disposal has already taken the process down, so this settles.
-    await child.finished.catch(() => undefined);
+    // one handle. Disposal is what makes this settle, by taking the process down;
+    // where it did not, the Turn is still running and there is nothing to wait
+    // for that will ever arrive.
+    if (ended) await child.finished.catch(() => undefined);
   }
 
   async function release(sessionKey: string): Promise<void> {

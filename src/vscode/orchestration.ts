@@ -123,14 +123,31 @@ export function orchestration(options: OrchestrationOptions): Orchestration {
     log: options.log,
   });
 
-  /** The socket, made once and only for a Session that may actually use it. */
+  /**
+   * The socket, made once and only for a Session that may actually use it.
+   *
+   * A start that failed is forgotten rather than kept. Creating one is the
+   * machine's work — a temporary directory it would not write, descriptors that
+   * ran out — and a memoized rejection would answer every later Session with the
+   * one bad moment, for the life of the window and with no way back from inside
+   * the product.
+   */
   const socket = (): Promise<OrchestrationServer> => {
-    server ??= startOrchestrationServer({ handler: orchestrator.handle, log: options.log }).then(
-      (live) => {
-        address = live.address;
-        return live;
-      },
-    );
+    if (!server) {
+      const starting = startOrchestrationServer({ handler: orchestrator.handle, log: options.log })
+        .then((live) => {
+          address = live.address;
+          return live;
+        })
+        .catch((error: unknown) => {
+          // Only while it is still the one in flight: `dispose` replaces it with
+          // nothing, and a late failure clearing its successor would let a second
+          // socket open behind a teardown that had already closed the first.
+          if (server === starting) server = undefined;
+          throw error;
+        });
+      server = starting;
+    }
     return server;
   };
 
@@ -152,12 +169,24 @@ export function orchestration(options: OrchestrationOptions): Orchestration {
       // whole request, which is what keeps the two from drifting apart.
       const refused = stopped ? "agent conductor is shutting down" : shimRefusal(conditions);
       if (refused) return { servers: [], revoke: () => undefined, refused };
+      let issuer;
+      try {
+        issuer = await socket();
+      } catch (error) {
+        // Delegation is the optional half of a Session, and this is the only
+        // answer that keeps it that way: a socket the machine would not give us
+        // otherwise travels back through the spawn gate and refuses the Session
+        // itself, so one bad moment leaves a window in which no agent starts.
+        const said = `the orchestration socket could not be created: ${message(error)}`;
+        options.log.log("error", said);
+        return { servers: [], revoke: () => undefined, refused: said };
+      }
       return injectShim({
         ...conditions,
         sessionKey: request.sessionKey,
         ...(request.parentSessionKey ? { parentSessionKey: request.parentSessionKey } : {}),
         roots: request.roots,
-        issuer: await socket(),
+        issuer,
         launch: options.shim,
         now: () => Date.now(),
       });

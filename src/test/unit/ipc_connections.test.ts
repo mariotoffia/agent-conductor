@@ -299,3 +299,43 @@ test("a Shim that stops reading its answers stops being read from", async (t) =>
 
   assert.ok(handled < asked, `a peer that never reads was served all ${asked} of its requests anyway`);
 });
+
+/**
+ * The socket a Shim is given can still fail after `listen` has answered — an
+ * accept that runs out of descriptors is the ordinary way — and an `error` event
+ * with no listener is an uncaught exception in the host that raised it. Nothing
+ * here can recover an accept, so what has to happen is that it is said rather
+ * than thrown.
+ *
+ * Reached by standing in for `net.createServer`, because the raw server is the
+ * one thing this module deliberately never hands out; the fault itself is Node's
+ * own, emitted exactly as an accept failure arrives.
+ */
+test("a socket that fails after it is listening is reported, not thrown at the host", async (t) => {
+  const said: string[] = [];
+  const made: net.Server[] = [];
+  const real = net.createServer;
+  net.createServer = ((...args: Parameters<typeof net.createServer>) => {
+    const server = real(...args);
+    made.push(server);
+    return server;
+  }) as typeof net.createServer;
+  let server;
+  try {
+    server = await ipcServer(t, {
+      handler: async () => ({}),
+      log: { log: (_level, text) => said.push(text) },
+    });
+  } finally {
+    net.createServer = real;
+  }
+
+  const raw = made[0];
+  assert.ok(raw, "the test never got hold of the socket it is about to fault");
+  raw.emit("error", new Error("EMFILE: too many open files, accept"));
+
+  assert.match(said.join("\n"), /EMFILE/, "an accept that failed was never reported");
+  // And the socket a Shim already holds is still the one it was given: reporting
+  // an accept failure is not the same as giving up the address.
+  assert.ok(server.address.length > 0);
+});

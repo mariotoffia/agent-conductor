@@ -386,3 +386,44 @@ test("cancelling a Subagent that had already finished says so", async (t) => {
 
   assert.equal(answer.state, "done", "a Subagent that finished was not cancelled by being asked");
 });
+
+/**
+ * Teardown may not depend on a Subagent's cooperation.
+ *
+ * Ending the tree is a loop, and written as one plain `await` per child a single
+ * Agent that refuses to stop ends the loop — every sibling after it is left
+ * running with nothing that can reach them, which is the orphaned process
+ * ADR-0008 exists to prevent. Within one child the same applies to the two
+ * steps: only `dispose` takes the process down, so a `cancel` the Agent refused
+ * must not be allowed to skip it.
+ */
+// Its own deadline: the failure this guards against is teardown parking on a
+// Turn that never ends, and the default timeout makes that a minute of silence.
+test("a Subagent that refuses to stop does not keep its siblings alive", { timeout: 5_000 }, async () => {
+  const said: string[] = [];
+  const { host, orchestrator } = attached(fakeHost({ log: { log: (_level, text) => said.push(text) } }));
+
+  await orchestrator.handle(call("spawn_subagent", { ...brief, mode: "background" }));
+  await orchestrator.handle(call("spawn_subagent", { ...brief, mode: "background" }));
+  await host.opened(2);
+  const stubborn = host.children[0];
+  const sibling = host.children[1];
+  assert.ok(stubborn && sibling);
+  stubborn.cancel = async () => {
+    throw new Error("this agent refused to be cancelled");
+  };
+  const ended = stubborn.dispose.bind(stubborn);
+  stubborn.dispose = async () => {
+    await ended();
+    // Deliberately without ending the Turn. Disposal is what takes the process
+    // down, so one that failed leaves a Turn that never finishes — and teardown
+    // may not park on it, or the window never closes at all.
+    throw new Error("its process would not be signalled");
+  };
+
+  await orchestrator.dispose();
+
+  assert.equal(stubborn.disposed, true, "a cancel that threw skipped the only step that ends a process");
+  assert.equal(sibling.disposed, true, "one subagent that would not stop left its sibling running");
+  assert.match(said.join("\n"), /refused to be cancelled/);
+});

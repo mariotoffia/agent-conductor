@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type * as acp from "@agentclientprotocol/sdk";
+import { message } from "../core/index.js";
 import type {
   ConductorSession,
   ExecutablePort,
@@ -189,8 +190,27 @@ export async function launchSession(launch: SessionLaunch): Promise<ConductorSes
     cwd,
   });
   void session.exited.then(() => {
-    revokeOrchestration();
-    void orchestration?.release(sessionKey);
+    // Two guarantees, not one statement after another. Withdrawing the capability
+    // takes authority back; releasing the key ends every Subagent below this
+    // Session — and only the second stops processes. A throw from the first would
+    // otherwise take the second with it and leave a tree nothing can reach, which
+    // is the failure ADR-0008 exists to prevent. So neither is told anything by
+    // the other, and a teardown that failed says so rather than becoming a
+    // rejection nobody is waiting on.
+    try {
+      revokeOrchestration();
+    } catch (error) {
+      launch.log.log(
+        "error",
+        `the shim capability for this session was not withdrawn: ${message(error)}`,
+      );
+    }
+    void orchestration?.release(sessionKey).catch((error: unknown) => {
+      launch.log.log(
+        "error",
+        `the subagents below this session were not all ended: ${message(error)}`,
+      );
+    });
   });
   return session;
 }

@@ -214,3 +214,33 @@ test("the quietest severity is written when the level asks for it", () => {
   // exactly the records that were asked for.
   assert.deepEqual(written, ["trace said"]);
 });
+
+/**
+ * A log record is written from places nothing is waiting on: an Agent process
+ * that ended, a pipe that drained, a Turn's `finally`. Every one of them reaches
+ * the window twice — the configured level is re-read, then the channel is
+ * written — and a window on its way out answers both by throwing.
+ *
+ * Guarded here rather than at each caller. There are dozens of them, none has
+ * anywhere to put the failure, and the one thing a log must never do is end the
+ * work that was logging.
+ */
+test("a window that has gone cannot fail whatever was writing to its log", () => {
+  const closed = liveLogPort(
+    {
+      error: () => {
+        throw new Error("Channel has been closed");
+      },
+      info: () => undefined,
+      debug: () => undefined,
+      trace: () => undefined,
+    } as never,
+    () => "trace",
+  );
+  const unreadable = liveLogPort({ error: () => undefined } as never, () => {
+    throw new Error("Extension instance has been disposed");
+  });
+
+  assert.doesNotThrow(() => closed.log("error", "an agent process ended"));
+  assert.doesNotThrow(() => unreadable.log("error", "an agent process ended"));
+});

@@ -240,7 +240,9 @@ sessionTest("a runtime the settings do not describe is refused by name", async (
  * what was given back. The real one has its own tests; what only this can show
  * is that a Session start reaches all three at the right moments.
  */
-function fakeOrchestration(over: { servers?: unknown[] } = {}) {
+function fakeOrchestration(
+  over: { servers?: unknown[]; revokeThrows?: boolean; releaseRejects?: boolean } = {},
+) {
   const record = {
     injected: [] as Array<{ sessionKey: string; depth: number; roots: readonly string[] }>,
     revoked: 0,
@@ -260,6 +262,7 @@ function fakeOrchestration(over: { servers?: unknown[] } = {}) {
         servers: (over.servers ?? []) as never,
         revoke: () => {
           record.revoked += 1;
+          if (over.revokeThrows) throw new Error("the capability table refused");
         },
       };
     },
@@ -268,6 +271,7 @@ function fakeOrchestration(over: { servers?: unknown[] } = {}) {
     },
     async release(sessionKey) {
       record.released.push(sessionKey);
+      if (over.releaseRejects) throw new Error("a subagent would not stop");
     },
     reconcile: async () => undefined,
     releaseWorktree: async () => ({ removed: false }),
@@ -387,4 +391,60 @@ sessionTest("a live Subagent's row offers the checkout it is working in", async 
   const [row] = await harness.tree.getChildren();
   assert.equal(row.live, true);
   assert.deepEqual(row.worktree, { path: process.cwd(), branch: "agent-conductor/child" });
+});
+
+/**
+ * What a Session's process ending owes the spawn tree, when one of the two
+ * halves fails.
+ *
+ * Withdrawing the capability and cancelling everything below the Session are
+ * separate guarantees, and only the second ends processes. Written as one
+ * statement after another, a throw from the first takes the second with it — and
+ * what is left is a tree of Subagent processes nothing will ever stop, which is
+ * exactly the failure ADR-0008 exists to prevent. Neither half may be told
+ * anything by the other.
+ */
+sessionTest("a capability that refuses to be withdrawn still ends everything below it", async () => {
+  fingerprint = await trustedFingerprint();
+  const harness = harnessFor();
+  const { orchestration, record } = fakeOrchestration({ revokeThrows: true });
+
+  const session = await harness.launch({ orchestration });
+  const attached = record.attached[0];
+  assert.ok(attached);
+
+  await session.dispose();
+  await session.exited;
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(record.revoked, 1, "the capability was never even asked for");
+  assert.deepEqual(
+    record.released,
+    [attached.sessionKey],
+    "a revoke that threw left every subagent below this session running",
+  );
+});
+
+sessionTest("a spawn tree that would not end says so, rather than going unhandled", async (t) => {
+  fingerprint = await trustedFingerprint();
+  const harness = harnessFor();
+  const { orchestration, record } = fakeOrchestration({ releaseRejects: true });
+  const said: string[] = [];
+  const failures: unknown[] = [];
+  const watch = (reason: unknown): void => {
+    failures.push(reason);
+  };
+  process.on("unhandledRejection", watch);
+  t.after(() => process.off("unhandledRejection", watch));
+
+  const session = await harness.launch({ orchestration, log: { log: (_level, text) => said.push(text) } });
+  await session.dispose();
+  await session.exited;
+  // Two turns: one for the exit handler, one for the rejection it produced.
+  await new Promise((resolve) => setImmediate(resolve));
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(record.released.length, 1);
+  assert.deepEqual(failures, [], "a teardown failure reached nobody but the unhandled-rejection handler");
+  assert.match(said.join("\n"), /subagent/i);
 });

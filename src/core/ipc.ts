@@ -210,6 +210,16 @@ export async function startOrchestrationServer(
     socket.on("close", () => connections.delete(socket));
     serve(socket);
   });
+  // A listening socket goes on failing after `listen` has answered: an accept
+  // that runs out of descriptors is the ordinary way, and it arrives here rather
+  // than on any one connection. The listener `bind` uses is a one-shot for the
+  // bind itself and is taken off again, so without this the socket spends its
+  // whole life with none — and `emit("error")` with no listener does not return
+  // false, it throws, out of Node's own accept path and into whatever process
+  // this is. Nothing here can recover an accept, so it is said, not thrown.
+  server.on("error", (error: Error) => {
+    options.log?.log("error", `orchestration socket: ${error.message}`);
+  });
   // A backstop under the per-capability cap: connections that have proved
   // nothing yet are still descriptors, and the handshake deadline is 10 seconds
   // of them.

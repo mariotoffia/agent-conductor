@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import net from "node:net";
 import { test, type TestContext } from "node:test";
 import type { ResolvedRuntime, RuntimeSpec } from "../../core/index.js";
 import { readSettings } from "../../vscode/config.js";
@@ -174,4 +175,80 @@ test("a preset the settings do not have leaves the defaults to the parent's own 
   assert.equal(limits.defaultRuntimeId, undefined);
   assert.equal(limits.defaultModel, undefined);
   assert.equal(limits.defaultEffort, undefined);
+});
+
+/**
+ * One socket creation that fails the way a real bind failure does, and the
+ * genuine article every time after.
+ *
+ * Reached by standing in for `net.createServer`, because a bind failure is not
+ * something this wiring can be asked for: it comes from the machine — a
+ * temporary directory that cannot be written, descriptors that ran out — and
+ * those are exactly the conditions a window has to survive.
+ */
+function socketFailsOnce(): () => void {
+  const real = net.createServer;
+  let spent = false;
+  net.createServer = ((...args: Parameters<typeof net.createServer>) => {
+    const server = real(...args);
+    if (spent) return server;
+    spent = true;
+    server.listen = (() => {
+      setImmediate(() => server.emit("error", new Error("EACCES: the socket could not be created")));
+      return server;
+    }) as typeof server.listen;
+    return server;
+  }) as typeof net.createServer;
+  return () => {
+    net.createServer = real;
+  };
+}
+
+test("a socket that could not be created refuses the Shim, not the Session", async (t) => {
+  const said: string[] = [];
+  const conductor = wiring(
+    t,
+    { "orchestration.enabled": true },
+    { log: { log: (_level, text) => said.push(text) } },
+  );
+
+  const restore = socketFailsOnce();
+  let refused;
+  try {
+    refused = await conductor.inject({
+      runtime: ELIGIBLE,
+      sessionKey: "first-session",
+      depth: 0,
+      roots: ["/workspace"],
+    });
+  } finally {
+    restore();
+  }
+
+  // Delegation is the optional part. A Session that cannot have it still runs:
+  // this is the only answer that does not turn one failed socket into a window
+  // where no agent can be started at all.
+  assert.deepEqual(refused.servers, []);
+  assert.match(refused.refused ?? "", /socket/i);
+  assert.match(said.join("\n"), /EACCES/, "the socket failure was never reported");
+});
+
+test("a socket that failed once is tried again, not remembered as broken", async (t) => {
+  const conductor = wiring(t, { "orchestration.enabled": true });
+  const restore = socketFailsOnce();
+  try {
+    await conductor.inject({ runtime: ELIGIBLE, sessionKey: "first", depth: 0, roots: ["/workspace"] });
+  } finally {
+    restore();
+  }
+
+  const injection = await conductor.inject({
+    runtime: ELIGIBLE,
+    sessionKey: "second",
+    depth: 0,
+    roots: ["/workspace"],
+  });
+
+  assert.equal(injection.servers.length, 1, "the next session got the remembered failure");
+  assert.ok(conductor.address(), "the window never opened a socket after the first one failed");
 });

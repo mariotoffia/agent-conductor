@@ -1,4 +1,5 @@
 import { spawn, type ChildProcess } from "node:child_process";
+import type { Readable } from "node:stream";
 import type * as acp from "@agentclientprotocol/sdk";
 import { methods } from "@agentclientprotocol/sdk";
 import type { TerminalPort } from "../core/index.js";
@@ -181,7 +182,7 @@ export class TerminalService implements TerminalPort {
       child.once("close", finish);
     });
     for (const stream of [child.stdout, child.stderr]) {
-      stream?.on("data", (chunk: Buffer) => append(terminal, chunk));
+      collectPipe(stream, (chunk) => append(terminal, chunk));
     }
 
     this.#issued += 1;
@@ -259,6 +260,25 @@ export class TerminalService implements TerminalPort {
     }
     return terminal;
   }
+}
+
+/**
+ * Collects one of a command's pipes.
+ *
+ * The `error` listener is not bookkeeping. A stream that fails with nothing
+ * listening does not report false from `emit` — it throws, out of Node's own
+ * read path and into whichever process is doing the reading, over a broken pipe
+ * that is no reason to take an extension host down. So a pipe that failed says
+ * so where the command's own words go, exactly as a command that could not start
+ * does, and the exit status still reports what became of the process.
+ *
+ * Exported because that is the only way to hold it: the pipes belong to a child
+ * this service spawns itself, and a test cannot reach them from outside.
+ */
+export function collectPipe(stream: Readable | null, onChunk: (chunk: Buffer) => void): void {
+  if (!stream) return;
+  stream.on("data", onChunk);
+  stream.on("error", (error: Error) => onChunk(Buffer.from(`${error.message}\n`, "utf8")));
 }
 
 /** The Client Operation a method authorizes under; every method here has one. */
