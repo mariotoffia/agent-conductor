@@ -54,10 +54,11 @@ Devices        Runtimes — the Agent processes, over ACP
 
 **`Orchestrator` is Kernel, not an Application.** It enforces the Depth Cap, the
 semaphore, the per-parent aggregate count and the cancellation cascade, and it
-mints and withdraws the Session Capability. Placing it above the Kernel would
-put privilege enforcement in an Application, and every other Application — and
-every Driver reaching the spawn path — would then sit outside it. Its definition
-in `UBIQUITOUS.md` is unchanged; it gains a layer to live in.
+mints and withdraws the Session Capability. If it sat above the Kernel as an
+Application, the limits it enforces would sit there too — and nothing would
+force the other Applications, or a Driver reaching the spawn path, to go
+through them. Its definition in `UBIQUITOUS.md` is unchanged; it gains a layer
+to live in.
 
 **There is one Loop per window**, owning one Work Queue. A prompt, a cron tick
 and a Subagent's request all enter it the same way, because the alternative is
@@ -92,8 +93,7 @@ will not be back to fix them, so an unversioned interface breaks them silently.
 **With nothing configured, behaviour is unchanged.** The Loop ships with
 `passthrough` (analyse) and `preset-route` (route) enabled — one prompt, one
 Session, one answer, no model call the user did not ask for. Everything else is
-off. A feature that alters the product before it is switched on cannot be
-released behind a switch.
+off. The switch is only honest if the feature changes nothing while it is off.
 
 **New terms for `UBIQUITOUS.md`**, landing with the first implementation:
 Kernel, Driver, Application, Work Item, Stage, Loop, Driver Host, Driver Trust,

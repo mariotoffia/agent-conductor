@@ -12,11 +12,21 @@ Status: draft — plans are temporary; promote durable decisions to ADRs (AGENTS
 
 ## What is being built
 
-TODO: What about...
-1. Memory driver?
-2. How are a driver different from a mcp or internal tool call
-3. Do we support "meta level" tool/MCP calls?
-4. If (3) mcp driver?
+Questions that came up while planning, answered by the ADRs rather than left open:
+
+1. **A memory Driver** — no. No Stage needs one, and ADR-0016 keeps per-Driver
+   durable state out until a real Driver needs it. Context that must travel
+   between Work Items travels as the Brief and the reduce output.
+2. **How a Driver differs from an MCP or internal tool call** — direction of
+   control. The Kernel calls a Driver, at a fixed Stage, confined in the Driver
+   Host. The Agent calls a tool, mid-Turn, whenever its model decides. A Driver
+   extends the Kernel; a tool extends the Agent. Goes into `UBIQUITOUS.md` with
+   the other terms (see Wiring below).
+3. **Meta-level tool/MCP calls from a Driver** — no. `ctx` is the whole syscall
+   surface (ADR-0016). A Driver that needs a tool result returns a Work Item;
+   the Session that item becomes has the MCP servers.
+4. **An MCP Driver** — follows from 3: no. Routing work to an MCP-equipped
+   Agent is a Preset, not a Stage.
 
 One Loop per window owning one Work Queue. Everything that wants work done — a
 chat prompt, a cron tick, a Subagent asking over the Shim — puts a Work Item on
@@ -47,7 +57,7 @@ task because nothing else fits until it is done.
 | `src/vscode/participant.ts` | 500 | 500 |
 | `src/core/orchestrator.ts` | 496 | 500 |
 | `src/core/ipc.ts` | 485 | 500 |
-| `src/vscode/composition.ts` | 478 | 500 |
+| `src/vscode/composition.ts` | 492 | 500 |
 
 - [ ] Extract the slash-command handlers from `participant.ts` into `src/vscode/participantCommands.ts`. Behaviour unchanged; `make test` passes with no test edited.
 - [ ] Extract Loop wiring out of `composition.ts` into `src/vscode/loopWiring.ts` before adding any, so composition keeps its shape.
@@ -78,6 +88,9 @@ the phase's exit criterion.
 - [ ] `src/core/loop/loop.ts` — drain the queue through the five Stages. `dispatch` calls `Orchestrator` and nothing else does.
 - [ ] A sync single item hands the live `ConductorSession` back to its Application, so the participant streams exactly as it does today. The Loop decides *what Sessions to open*; it does not wrap the streaming.
 - [ ] Cancelling a parent cancels its Drivers and its Work Items to the bottom of the tree.
+- [ ] A Stage with no enabled Driver has a Kernel default: gate accepts, reduce hands a single result through unchanged. The default path must not require a Driver to exist.
+- [ ] Follow-ups a gate Driver enqueues charge the parent's aggregate count like any other child — a rejecting gate cannot loop past the limit.
+- [ ] `src/test/unit/gate_follow_ups_are_counted.test.ts` — a gate that re-enqueues on every rejection stops at the parent's aggregate count, not never.
 - [ ] `src/test/unit/loop_stage_order.test.ts` — analyse, route, dispatch, gate, reduce, in that order, with a Driver at each.
 - [ ] `src/test/unit/loop_default_is_unchanged.test.ts` — with only the two default Drivers, one prompt produces one Session and one answer, and no model call nobody asked for.
 
@@ -93,7 +106,7 @@ the phase's exit criterion.
 
 - [ ] The participant becomes an Application: submit a Work Item, render what comes back.
 - [ ] Settings: `agentConductor.loop.enabled`, `.drivers` (id → enabled).
-- [ ] `UBIQUITOUS.md` gains Kernel, Driver, Application, Work Item, Stage, Loop, Driver Host, Driver Trust, Driver Capability — the words before the code that uses them.
+- [ ] `UBIQUITOUS.md` gains Kernel, Driver, Application, Work Item, Stage, Loop, Driver Host, Driver Trust, Driver Capability — the words before the code that uses them. The Driver entry says how it differs from an MCP tool: the Kernel calls a Driver, the Agent calls a tool.
 - [ ] `ARCHITECTURE.md` gains a `§Loop` data flow beside `§Spawn`.
 - [ ] `make check` passes with no existing test edited.
 
@@ -106,7 +119,8 @@ the phase's exit criterion.
 - [ ] `src/core/loop/host.ts` — spawn with `--permission --allow-fs-read=<roots>` and `ELECTRON_RUN_AS_NODE=1`; read the confinement report as the first line; refuse everything but built-ins if `process.permission` is inactive.
 - [ ] Two Hosts: trusted (granted roots) and ephemeral (no roots). Same binary, different flags.
 - [ ] `src/core/loop/driverTrust.ts` — realpath after symlinks plus a digest of the source, re-derived at every load, never read back from a record. Reuses what `executables.ts` does for launch commands.
-- [ ] Approval dialog: id, Stages, fingerprint, exact capabilities and roots, path — and the source opened read-only beside it.
+- [ ] Approval dialog: id, Stages, fingerprint, exact capabilities and roots, path — and the source opened read-only beside it. The network gap is stated in the dialog and in the settings description (ADR-0016).
+- [ ] The ephemeral Host stubs `net`, `dns`, `http`, `https` and `fetch` before loading any Driver — a speed bump, not a boundary (ADR-0016) — with a test that a stubbed call throws.
 - [ ] Per-call deadline; a breach restarts that Host, fails the calls in flight, and disables the Driver after a threshold.
 - [ ] `src/test/unit/driver_confinement_report.test.ts` — an inactive permission model loads built-ins only, and says why.
 - [ ] `src/test/unit/driver_trust_refuses_edited_source.test.ts` — approve, edit one byte, refuse.

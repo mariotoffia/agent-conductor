@@ -46,9 +46,9 @@ and `MAX_FRAME_BYTES` are reused as they are.
 **The Host's first line is its confinement report**, before anything else —
 mirroring the Shim, whose first line is its capability and nothing else. If
 `process.permission` is inactive the Kernel loads built-in Drivers only, and says
-why. Unlike a Suppression Capability this evidence is a boolean the Host can
-actually produce, so it may gate; ADR-0014's lesson is about proof that cannot be
-gathered, not about proof that can.
+why. Gating on this does not repeat the mistake ADR-0014 corrected: that lesson
+was about evidence nobody can gather, and this is a boolean the Host can simply
+report.
 
 **Two Hosts, one per privilege level.** The same binary, spawned twice:
 
@@ -57,10 +57,11 @@ gathered, not about proof that can.
 | trusted | built-in and human-approved | the granted roots |
 | ephemeral | agent-authored, unprompted | nothing |
 
-A shared heap is the one leak in a single Host: agent-authored code beside a
-Driver that was granted roots. Splitting by privilege closes it with one extra
-spawn and no second code path. Split further only when a real Driver needs a root
-another approved Driver must not see.
+With one Host, agent-authored code would share a process — and a heap — with
+Drivers that hold granted roots, and could read whatever they read. That is the
+one leak, and splitting by privilege closes it with one extra spawn and no second
+code path. Split further only when a real Driver needs a root another approved
+Driver must not see.
 
 **`ctx` is the whole syscall surface.** Four calls:
 
@@ -84,12 +85,13 @@ user has switched auto-approval on.
 of the source, re-derived at every load and never read back from a record. Editing
 an approved Driver refuses it at the next load.
 
-**The approval dialog shows what cannot be trimmed and opens the source beside
-it.** Runtime Trust's rule that nothing in the dialog is trimmed cannot hold for a
-Driver, whose source is unbounded. The dialog carries the id, the Stages, the
-fingerprint, the exact capabilities and roots, and the path; the source opens
-read-only in the editor. That serves the rule's purpose — approving what you
-cannot see is what it exists to prevent — better than a truncated modal.
+**The approval dialog shows everything but the source, and opens the source
+beside it.** Runtime Trust insists that nothing in an approval dialog is trimmed.
+A Driver's source is too long for any dialog, so a dialog that included it would
+have to trim it. Instead the dialog carries what fits whole — the id, the Stages,
+the fingerprint, the exact capabilities and roots, and the path — and the source
+opens read-only in the editor. The rule exists so nobody approves what they
+cannot see; a full file in the editor serves that better than a truncated modal.
 
 **A Driver that misses its deadline faults its Host.** The Kernel restarts that
 Host, fails the calls in flight, and disables the offending Driver after a

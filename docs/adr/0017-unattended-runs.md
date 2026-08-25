@@ -59,8 +59,9 @@ turns it off**, and the Loop then holds its queue only in memory.
 **A queue takes the Hold stamp the session store already uses.** Two windows share
 one storage directory. The window holding the queue drains it; a second window on
 the same folder shows it read-only rather than dispatching it a second time. A
-stamp rather than a flag, for the reason the session store gives: a window that is
-still there keeps saying so, and a window that was killed simply stops.
+stamp rather than a flag, because a stamp is re-said while the holder lives and
+ages out when it is killed — a flag left behind by a killed window would lock the
+queue until somebody deleted it by hand.
 
 ## Alternatives considered
 
@@ -92,8 +93,9 @@ that would have been granted by a person present. That has to read clearly in th
 report, or it will be mistaken for the Agent failing.
 
 A Schedule is spend on a timer. The disabling threshold, the skipped catch-up and
-the settings-only enablement are all the same guard from different directions, and
-removing any one of them puts the other two under load they were not sized for.
+the settings-only enablement all guard that same spend from a different direction.
+Remove any one and the other two have to catch what it caught, which they were
+not designed to do.
 
 The Hold stamp is now used by two stores. If its meaning ever changes, both move
 together.
